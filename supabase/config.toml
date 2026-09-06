@@ -1,0 +1,2 @@
+[functions.mobile-sasa-send-sms]
+verify_jwt = false
