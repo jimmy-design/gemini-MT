@@ -30,6 +30,25 @@ function formatUnread(count) {
   return String(count)
 }
 
+function normalizePhone(value) {
+  if (!value) return ''
+  const cleaned = String(value).replace(/[^\d+]/g, '')
+  if (cleaned.startsWith('+')) return `+${cleaned.slice(1).replace(/\D/g, '')}`
+  return cleaned.replace(/\D/g, '')
+}
+
+function initialsFor(name, fallback = 'WU') {
+  const initials = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+
+  return initials || fallback
+}
+
 function mapConversation(row) {
   return {
     id: row.id,
@@ -52,10 +71,14 @@ function mapConversation(row) {
   }
 }
 
-function mapMessage(row) {
+function mapMessage(row, currentProfileId) {
+  const from = row.sender_profile_id
+    ? row.sender_profile_id === currentProfileId ? 'me' : 'them'
+    : row.sender
+
   return {
     id: row.id,
-    from: row.sender,
+    from,
     type: row.type,
     text: row.body,
     caption: row.caption,
@@ -96,6 +119,16 @@ function mapProfile(row) {
     status: row.status,
     lastSeen: row.last_seen,
     verified: row.verified,
+  }
+}
+
+function mapMatchedContact(row) {
+  const profile = row.profile || row
+  return {
+    ...mapProfile(profile),
+    deviceName: row.device_name,
+    devicePhoneNumber: row.device_phone_number,
+    phoneNumber: profile.phone_number,
   }
 }
 
@@ -142,37 +175,108 @@ function optionalSingleResult(result) {
 
 export async function getAppData() {
   const client = requireSupabase()
-  const [conversations, statuses, calls, communities, profiles, marketplace, settings] = await Promise.all([
-    client.from('conversations').select('*').order('pinned', { ascending: false }).order('last_message_at', { ascending: false }),
+
+  const { data: authData, error: authError } = await client.auth.getUser()
+  if (authError) throw authError
+
+  if (!authData.user) {
+    return {
+      needsRegistration: true,
+      currentProfile: null,
+      conversations: [],
+      statuses: [],
+      calls: [],
+      communities: [],
+      contacts: [],
+      marketplace: [],
+      settings: null,
+    }
+  }
+
+  const { data: profile, error: profileError } = await client
+    .from('profiles')
+    .select('*')
+    .eq('auth_user_id', authData.user.id)
+    .maybeSingle()
+
+  if (profileError) throw profileError
+
+  if (!profile) {
+    return {
+      needsRegistration: true,
+      currentProfile: null,
+      conversations: [],
+      statuses: [],
+      calls: [],
+      communities: [],
+      contacts: [],
+      marketplace: [],
+      settings: null,
+    }
+  }
+
+  const memberships = await client
+    .from('conversation_members')
+    .select('conversation_id')
+    .eq('profile_id', profile.id)
+
+  const conversationIds = optionalResult(memberships).map((item) => item.conversation_id)
+  const conversationsQuery = conversationIds.length
+    ? client.from('conversations').select('*').in('id', conversationIds).order('pinned', { ascending: false }).order('last_message_at', { ascending: false })
+    : Promise.resolve({ data: [], error: null })
+
+  const [conversations, statuses, calls, communities, contacts, marketplace, settings] = await Promise.all([
+    conversationsQuery,
     client.from('status_updates').select('*').order('created_at', { ascending: false }),
     client.from('calls').select('*').order('created_at', { ascending: false }),
     client.from('communities').select('*').order('created_at', { ascending: false }),
-    client.from('profiles').select('*').order('created_at', { ascending: false }),
+    client.from('user_contacts').select('device_name, device_phone_number, profile:contact_profile_id(*)').eq('owner_profile_id', profile.id).order('matched_at', { ascending: false }),
     client.from('marketplace_items').select('*').order('created_at', { ascending: false }),
-    client.from('user_settings').select('*').limit(1).maybeSingle(),
+    client.from('user_settings').select('*').eq('auth_user_id', authData.user.id).limit(1).maybeSingle(),
   ])
 
+  const membershipsError = tableIsMissing(memberships.error) ? null : memberships.error
+  const contactsError = tableIsMissing(contacts.error) ? null : contacts.error
   const marketplaceError = tableIsMissing(marketplace.error) ? null : marketplace.error
   const settingsError = tableIsMissing(settings.error) ? null : settings.error
-  const error = conversations.error || statuses.error || calls.error || communities.error || profiles.error || marketplaceError || settingsError
+  const error = membershipsError || conversations.error || statuses.error || calls.error || communities.error || contactsError || marketplaceError || settingsError
   if (error) throw error
 
   const settingsRow = optionalSingleResult(settings)
 
   return {
+    needsRegistration: false,
+    currentProfile: mapProfile(profile),
     conversations: requireResult(conversations).map(mapConversation),
     statuses: requireResult(statuses).map(mapStatus),
     calls: requireResult(calls).map(mapCall),
     communities: requireResult(communities),
-    contacts: requireResult(profiles).map(mapProfile),
+    contacts: optionalResult(contacts).map(mapMatchedContact),
     marketplace: optionalResult(marketplace).map(mapMarketplaceItem),
     settings: mapSettings(settingsRow),
   }
 }
 
+export async function getCurrentProfile() {
+  const client = requireSupabase()
+  const { data: authData, error: authError } = await client.auth.getUser()
+  if (authError) throw authError
+  if (!authData.user) return null
+
+  const { data, error } = await client
+    .from('profiles')
+    .select('*')
+    .eq('auth_user_id', authData.user.id)
+    .maybeSingle()
+
+  if (error) throw error
+  return data
+}
+
 export async function getMessages(conversationId) {
   const client = requireSupabase()
   if (!conversationId) return []
+  const profile = await getCurrentProfile()
 
   const { data, error } = await client
     .from('messages')
@@ -181,17 +285,20 @@ export async function getMessages(conversationId) {
     .order('created_at', { ascending: true })
 
   if (error) throw error
-  return data.map(mapMessage)
+  return data.map((message) => mapMessage(message, profile?.id))
 }
 
 export async function sendMessage(conversationId, text) {
   const client = requireSupabase()
   if (!conversationId) throw new Error('Choose a conversation before sending a message.')
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before sending messages.')
 
   const { data, error } = await client
     .from('messages')
     .insert({
       conversation_id: conversationId,
+      sender_profile_id: profile.id,
       sender: 'me',
       type: 'text',
       body: text,
@@ -209,7 +316,141 @@ export async function sendMessage(conversationId, text) {
 
   if (updateError) throw updateError
 
-  return mapMessage(data)
+  return mapMessage(data, profile.id)
+}
+
+export async function syncContactsToWave(deviceContacts) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before syncing contacts.')
+
+  const normalized = deviceContacts
+    .flatMap((contact) => (contact.phoneNumbers || contact.phones || []).map((phone) => ({
+      name: contact.displayName || contact.name?.display || [contact.name?.given, contact.name?.family].filter(Boolean).join(' ') || 'Phone contact',
+      phone: normalizePhone(phone.number || phone.value || phone),
+    })))
+    .filter((contact) => contact.phone.length >= 7)
+
+  const uniquePhones = [...new Set(normalized.map((contact) => contact.phone))]
+  if (uniquePhones.length === 0) return []
+
+  const { data: matchedProfiles, error } = await client
+    .from('profiles')
+    .select('*')
+    .in('phone_number', uniquePhones)
+    .neq('id', profile.id)
+
+  if (error) throw error
+
+  const rows = matchedProfiles.map((matchedProfile) => {
+    const deviceContact = normalized.find((contact) => contact.phone === matchedProfile.phone_number)
+    return {
+      owner_profile_id: profile.id,
+      contact_profile_id: matchedProfile.id,
+      device_name: deviceContact?.name || matchedProfile.name,
+      device_phone_number: matchedProfile.phone_number,
+      matched_at: new Date().toISOString(),
+    }
+  })
+
+  if (rows.length > 0) {
+    const { error: upsertError } = await client
+      .from('user_contacts')
+      .upsert(rows, { onConflict: 'owner_profile_id,contact_profile_id' })
+
+    if (upsertError) throw upsertError
+  }
+
+  return matchedProfiles.map(mapProfile)
+}
+
+export async function findRegisteredContactByPhone(phone) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before adding contacts.')
+
+  const normalizedPhone = normalizePhone(phone)
+  const { data: contact, error } = await client
+    .from('profiles')
+    .select('*')
+    .eq('phone_number', normalizedPhone)
+    .neq('id', profile.id)
+    .maybeSingle()
+
+  if (error) throw error
+  if (!contact) throw new Error('No Wave user found with that phone number.')
+
+  const { error: upsertError } = await client
+    .from('user_contacts')
+    .upsert({
+      owner_profile_id: profile.id,
+      contact_profile_id: contact.id,
+      device_name: contact.name,
+      device_phone_number: normalizedPhone,
+      matched_at: new Date().toISOString(),
+    }, { onConflict: 'owner_profile_id,contact_profile_id' })
+
+  if (upsertError) throw upsertError
+  return mapProfile(contact)
+}
+
+export async function startDirectConversation(contactProfileId) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before starting a chat.')
+
+  const { data: contact, error: contactError } = await client
+    .from('profiles')
+    .select('*')
+    .eq('id', contactProfileId)
+    .single()
+
+  if (contactError) throw contactError
+
+  const memberships = await client
+    .from('conversation_members')
+    .select('conversation_id')
+    .eq('profile_id', profile.id)
+
+  const myConversationIds = optionalResult(memberships).map((item) => item.conversation_id)
+  if (myConversationIds.length > 0) {
+    const { data: existingMembers, error: existingError } = await client
+      .from('conversation_members')
+      .select('conversation_id')
+      .eq('profile_id', contactProfileId)
+      .in('conversation_id', myConversationIds)
+
+    if (existingError && !tableIsMissing(existingError)) throw existingError
+    if (existingMembers?.[0]?.conversation_id) return existingMembers[0].conversation_id
+  }
+
+  const { data: conversation, error: conversationError } = await client
+    .from('conversations')
+    .insert({
+      name: contact.name,
+      handle: contact.handle || contact.phone_number,
+      initials: contact.initials || initialsFor(contact.name),
+      color: contact.color || 'mint',
+      type: 'direct',
+      status: contact.status || 'offline',
+      last_seen: contact.last_seen || 'last seen recently',
+      preview: 'Say hi on Wave',
+      labels: ['Contact'],
+    })
+    .select()
+    .single()
+
+  if (conversationError) throw conversationError
+
+  const { error: membersError } = await client
+    .from('conversation_members')
+    .insert([
+      { conversation_id: conversation.id, profile_id: profile.id, role: 'owner' },
+      { conversation_id: conversation.id, profile_id: contactProfileId, role: 'member' },
+    ])
+
+  if (membersError) throw membersError
+  return conversation.id
 }
 
 export async function updateUserSettings(values) {
@@ -258,16 +499,19 @@ export async function verifyPhoneOtp(phone, token) {
 
 export async function saveRegistrationProfile({ userId, phone, countryName, countryCode }) {
   const client = requireSupabase()
-  const initials = phone.slice(-2)
+  if (!userId) throw new Error('Could not confirm your signed-in user. Try verifying the code again.')
+
+  const normalizedPhone = normalizePhone(phone)
+  const initials = normalizedPhone.slice(-2)
   const { error } = await client
     .from('profiles')
     .upsert({
       auth_user_id: userId,
-      phone_number: phone,
+      phone_number: normalizedPhone,
       country_name: countryName,
       country_code: countryCode,
       name: 'New Wave User',
-      handle: phone,
+      handle: normalizedPhone,
       initials,
       color: 'mint',
       status: 'online',

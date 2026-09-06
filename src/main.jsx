@@ -30,8 +30,8 @@ import {
   Video,
   VolumeX,
 } from 'lucide-react'
-import { getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, updateUserSettings, verifyPhoneOtp } from './api'
-import { hideKeyboard, lightTap, pickChatPhoto, shareWaveInvite } from './native'
+import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, startDirectConversation, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
+import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
@@ -179,7 +179,7 @@ function ReactNavIcon(item) {
 
 function Sidebar({ appData, activeId, setActiveId, view, setView, query, setQuery, filter, setFilter, openChat, openRegister }) {
   const [searchOpen, setSearchOpen] = useState(false)
-  const currentProfile = appData.contacts[0]
+  const currentProfile = appData.currentProfile
 
   return (
     <aside className="sidebar">
@@ -489,10 +489,76 @@ function CommunitiesPage({ communities }) {
   )
 }
 
-function ContactsPage({ contacts }) {
+function ContactsPage({ contacts, refreshAppData, openChat }) {
+  const [phone, setPhone] = useState('')
+  const [status, setStatus] = useState('')
+  const [syncing, setSyncing] = useState(false)
+
+  async function syncContacts() {
+    setSyncing(true)
+    setStatus('')
+    try {
+      const deviceContacts = await readDeviceContacts()
+      if (deviceContacts.length === 0) {
+        setStatus('Open Wave as the iOS app to read your phone contacts, or add a number below while testing.')
+        return
+      }
+
+      const matched = await syncContactsToWave(deviceContacts)
+      await refreshAppData()
+      setStatus(matched.length ? `${matched.length} Wave contact${matched.length === 1 ? '' : 's'} found.` : 'No registered Wave users found in your contacts yet.')
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function addPhoneContact(event) {
+    event.preventDefault()
+    if (!phone.trim()) return
+    setSyncing(true)
+    setStatus('')
+    try {
+      const contact = await findRegisteredContactByPhone(phone)
+      await refreshAppData()
+      setStatus(`${contact.name} is on Wave.`)
+      setPhone('')
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function messageContact(contactId) {
+    setSyncing(true)
+    setStatus('')
+    try {
+      const conversationId = await startDirectConversation(contactId)
+      await refreshAppData()
+      openChat(conversationId)
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <section className="content-page contacts-page">
       <PageTitle title="Contacts" text="People and groups you can message, call, or invite into communities." />
+      <div className="contact-tools">
+        <button type="button" onClick={syncContacts} disabled={syncing}>
+          <Icon name="phone" />
+          {syncing ? 'Checking...' : 'Sync phone contacts'}
+        </button>
+        <form onSubmit={addPhoneContact}>
+          <input value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" placeholder="+254..." aria-label="Wave phone number" />
+          <button type="submit" disabled={syncing}>Find</button>
+        </form>
+      </div>
+      {status && <div className="register-status">{status}</div>}
       <div className="page-list">
         {contacts.length === 0 && <EmptyState title="No contacts yet" text="Profiles and conversations from Supabase will appear here." />}
         <button className="contact-card" type="button" onClick={shareWaveInvite}>
@@ -504,13 +570,13 @@ function ContactsPage({ contacts }) {
           <Icon name="send" />
         </button>
         {contacts.map((person) => (
-          <button className="contact-card" key={person.id}>
+          <button className="contact-card" key={person.id} onClick={() => messageContact(person.id)} disabled={syncing}>
             <Avatar person={person} />
             <div>
               <strong>{person.name}</strong>
-              <small>{person.handle}</small>
+              <small>{person.deviceName || person.handle}</small>
             </div>
-            <Icon name="phone" />
+            <Icon name="send" />
           </button>
         ))}
       </div>
@@ -758,8 +824,14 @@ function AppFrame() {
     if (params.chatId) navigate(`/chats/${nextId}`)
   }
 
+  async function loadAppData() {
+    const data = await getAppData()
+    setAppData(data)
+    return data
+  }
+
   useEffect(() => {
-    getAppData().then(setAppData).catch((error) => setLoadError(error.message))
+    loadAppData().catch((error) => setLoadError(error.message))
   }, [])
 
   useEffect(() => {
@@ -769,6 +841,7 @@ function AppFrame() {
 
   if (loadError) return <main className="loading-screen error-screen"><div className="brand-mark">W</div><strong>Database error</strong><small>{loadError}</small></main>
   if (!appData) return <main className="loading-screen"><div className="brand-mark">W</div><strong>Loading Wave...</strong></main>
+  if (appData.needsRegistration) return <AuthRequired openRegister={() => navigate('/register')} />
 
   const active = appData.conversations.find((item) => item.id === activeId) || appData.conversations[0] || {
     id: '',
@@ -800,11 +873,22 @@ function AppFrame() {
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
       {view === 'Calls' && <CallsPage calls={appData.calls} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}
-      {view === 'Contacts' && <ContactsPage contacts={appData.contacts} />}
+      {view === 'Contacts' && <ContactsPage contacts={appData.contacts} refreshAppData={loadAppData} openChat={(chatId) => navigate(`/chats/${chatId}`)} />}
       {view === 'Marketplace' && <MarketplacePage items={appData.marketplace} />}
       {view === 'Settings' && <SettingsPage settings={appData.settings} />}
       <DetailPanel active={active} />
       <BottomNav view={view} setView={setView} />
+    </main>
+  )
+}
+
+function AuthRequired({ openRegister }) {
+  return (
+    <main className="loading-screen auth-required">
+      <div className="brand-mark">W</div>
+      <strong>Sign in with your phone number</strong>
+      <small>Wave only lets registered phone-number users chat with matched contacts.</small>
+      <button type="button" onClick={openRegister}>Register phone</button>
     </main>
   )
 }

@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Wave uses the camera to capture photos and videos for chats and status updates.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Wave uses contacts to find people who have registered with their phone number.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Wave uses the microphone for voice notes and calls.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

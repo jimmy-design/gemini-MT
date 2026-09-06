@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera'
+import { Contacts } from '@capacitor-community/contacts'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import { Keyboard } from '@capacitor/keyboard'
 import { Share } from '@capacitor/share'
@@ -32,4 +33,20 @@ export async function shareWaveInvite() {
     text: 'Join me on Wave.',
   }).catch(() => {})
   return true
+}
+
+export async function readDeviceContacts() {
+  if (!isNative) return []
+
+  const permission = await Contacts.requestPermissions().catch(() => null)
+  if (permission?.contacts && permission.contacts !== 'granted') return []
+
+  const result = await Contacts.getContacts({
+    projection: {
+      name: true,
+      phones: true,
+    },
+  }).catch(() => ({ contacts: [] }))
+
+  return result.contacts || []
 }
