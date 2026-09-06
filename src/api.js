@@ -489,6 +489,10 @@ export async function requestPhoneOtp(phone) {
     options: { channel: 'sms' },
   })
 
+  if (error?.message?.toLowerCase().includes('unsupported phone provider')) {
+    throw new Error('Phone login is not ready in Supabase yet. Enable Phone Auth and connect an SMS provider like Twilio, MessageBird, Vonage, or TextLocal.')
+  }
+
   if (error) throw error
   return { ok: true }
 }
