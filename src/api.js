@@ -526,7 +526,6 @@ export async function requestPhoneOtp(phone) {
   const client = requireSupabase()
   const { error } = await client.auth.signInWithOtp({
     phone,
-    options: { channel: 'sms' },
   })
 
   if (error?.message?.toLowerCase().includes('unsupported phone provider')) {
