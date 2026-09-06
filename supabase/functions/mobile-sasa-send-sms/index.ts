@@ -9,10 +9,14 @@ type SmsHookEvent = {
   }
 }
 
+type EdgeRuntimeApi = {
+  waitUntil?: (promise: Promise<unknown>) => void
+}
+
 const mobileSasaToken = Deno.env.get('MOBILESASA_API_TOKEN')
 const mobileSasaBaseUrl = Deno.env.get('MOBILESASA_BASE_URL') || 'https://api.mobilesasa.com/v1/send/message'
 const mobileSasaSenderId = Deno.env.get('MOBILESASA_SENDER_ID') || 'EASTMATTOTP'
-const hookSecret = Deno.env.get('SEND_SMS_HOOK_SECRET')
+const rawHookSecret = Deno.env.get('SEND_SMS_HOOK_SECRET')
 
 function messageFromError(error: unknown) {
   if (error instanceof Error) return error.message
@@ -52,14 +56,54 @@ function formatPhoneForMobileSasa(phone: string) {
 }
 
 async function verifyHookRequest(request: Request, body: string) {
-  if (!hookSecret) return
+  if (!rawHookSecret) return
 
-  const webhook = new Webhook(hookSecret)
-  await webhook.verify(body, {
+  const normalizedSecret = rawHookSecret.trim().startsWith('v1,')
+    ? rawHookSecret.trim().slice(3)
+    : rawHookSecret.trim()
+
+  const headers = {
     'webhook-id': request.headers.get('webhook-id') || '',
     'webhook-timestamp': request.headers.get('webhook-timestamp') || '',
     'webhook-signature': request.headers.get('webhook-signature') || '',
+  }
+
+  try {
+    await new Webhook(normalizedSecret).verify(body, headers)
+  } catch (error) {
+    if (normalizedSecret === rawHookSecret.trim()) throw error
+    await new Webhook(rawHookSecret.trim()).verify(body, headers)
+  }
+}
+
+async function sendMobileSasaOtp(phone: string, otp: string) {
+  if (!mobileSasaToken) {
+    throw new Error('MobileSasa API token is not configured in Edge Function secrets.')
+  }
+
+  const message = `Your Wave verification code is ${otp}. Do not share this code.`
+  const mobileSasaPhone = formatPhoneForMobileSasa(phone)
+
+  const mobileSasaResponse = await fetch(mobileSasaBaseUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${mobileSasaToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      senderID: mobileSasaSenderId,
+      phone: mobileSasaPhone,
+      message,
+    }),
   })
+
+  const responseText = await mobileSasaResponse.text()
+
+  if (!mobileSasaResponse.ok) {
+    throw new Error(`MobileSasa SMS failed with status ${mobileSasaResponse.status}: ${responseText || mobileSasaResponse.statusText}`)
+  }
+
+  console.log(`MobileSasa OTP sent to ${mobileSasaPhone}`)
 }
 
 Deno.serve(async (request) => {
@@ -69,7 +113,7 @@ Deno.serve(async (request) => {
         ok: true,
         function: 'mobile-sasa-send-sms',
         hasMobileSasaToken: Boolean(mobileSasaToken),
-        hasHookSecret: Boolean(hookSecret),
+        hasHookSecret: Boolean(rawHookSecret),
         senderId: mobileSasaSenderId,
       })
     }
@@ -104,29 +148,18 @@ Deno.serve(async (request) => {
       return hookError('Missing phone number or OTP in Supabase SMS hook payload.')
     }
 
-    const message = `Your Wave verification code is ${otp}. Do not share this code.`
-    const mobileSasaPhone = formatPhoneForMobileSasa(phone)
-
-    const mobileSasaResponse = await fetch(mobileSasaBaseUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${mobileSasaToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        senderID: mobileSasaSenderId,
-        phone: mobileSasaPhone,
-        message,
-      }),
+    const sendTask = sendMobileSasaOtp(phone, otp).catch((error) => {
+      console.error(`MobileSasa background send failed: ${messageFromError(error)}`)
     })
 
-    const responseText = await mobileSasaResponse.text()
+    const edgeRuntime = (globalThis as typeof globalThis & { EdgeRuntime?: EdgeRuntimeApi }).EdgeRuntime
 
-    if (!mobileSasaResponse.ok) {
-      return hookError(`MobileSasa SMS failed with status ${mobileSasaResponse.status}: ${responseText || mobileSasaResponse.statusText}`, 502)
+    if (edgeRuntime?.waitUntil) {
+      edgeRuntime.waitUntil(sendTask)
+    } else {
+      await sendTask
     }
 
-    console.log(`MobileSasa OTP sent to ${mobileSasaPhone}`)
     return new Response(null, { status: 200 })
   } catch (error) {
     return hookError(`Unhandled MobileSasa hook error: ${messageFromError(error)}`, 500)
