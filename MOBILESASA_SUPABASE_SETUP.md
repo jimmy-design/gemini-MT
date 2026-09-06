@@ -26,10 +26,10 @@ Use a rotated MobileSasa token:
 supabase secrets set MOBILESASA_API_TOKEN=your-rotated-mobilesasa-token
 supabase secrets set MOBILESASA_BASE_URL=https://api.mobilesasa.com/v1/send/message
 supabase secrets set MOBILESASA_SENDER_ID=EASTMATTOTP
-supabase secrets set SUPABASE_AUTH_HOOK_SECRET=your-random-hook-signing-secret
+supabase secrets set SEND_SMS_HOOK_SECRET=your-random-hook-signing-secret
 ```
 
-`SUPABASE_AUTH_HOOK_SECRET` should match the signing secret configured for the Supabase Auth hook.
+`SEND_SMS_HOOK_SECRET` should match the signing secret configured for the Supabase Auth hook.
 
 ## 3. Enable Phone Auth
 
@@ -41,7 +41,7 @@ In Supabase Dashboard:
 4. Enable the Send SMS hook.
 5. Choose HTTP endpoint.
 6. Set the endpoint URL to the Edge Function URL above.
-7. Set the same hook signing secret used in `SUPABASE_AUTH_HOOK_SECRET`.
+7. Set the same hook signing secret used in `SEND_SMS_HOOK_SECRET`.
 
 After this, `signInWithOtp({ phone })` will trigger the hook and MobileSasa will send the SMS code.
 

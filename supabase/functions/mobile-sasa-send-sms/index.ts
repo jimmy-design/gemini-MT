@@ -12,7 +12,7 @@ type SmsHookEvent = {
 const mobileSasaToken = Deno.env.get('MOBILESASA_API_TOKEN')
 const mobileSasaBaseUrl = Deno.env.get('MOBILESASA_BASE_URL') || 'https://api.mobilesasa.com/v1/send/message'
 const mobileSasaSenderId = Deno.env.get('MOBILESASA_SENDER_ID') || 'EASTMATTOTP'
-const hookSecret = Deno.env.get('SUPABASE_AUTH_HOOK_SECRET')
+const hookSecret = Deno.env.get('SEND_SMS_HOOK_SECRET')
 
 function messageFromError(error: unknown) {
   if (error instanceof Error) return error.message
