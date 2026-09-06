@@ -1,0 +1,19 @@
+{
+  "name": "Wave Private Messenger",
+  "short_name": "Wave",
+  "description": "A beautiful private messenger with chats, status, calls, communities, and smart privacy tools.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#14251f",
+  "theme_color": "#14251f",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/wave-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
