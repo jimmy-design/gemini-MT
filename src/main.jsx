@@ -1,4 +1,4 @@
-import { Component, StrictMode, useEffect, useMemo, useState } from 'react'
+import { Component, StrictMode, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -657,7 +657,73 @@ function RegisterPage() {
   const [step, setStep] = useState('phone')
   const [status, setStatus] = useState('')
   const [loading, setLoading] = useState(false)
+  const otpInputs = useRef([])
   const fullPhone = `${country.code}${localNumber.replace(/\D/g, '')}`
+  const otpDigits = otp.padEnd(6, ' ').slice(0, 6).split('')
+
+  useEffect(() => {
+    if (step !== 'otp') return undefined
+    window.setTimeout(() => otpInputs.current[0]?.focus(), 120)
+
+    if (!('OTPCredential' in window) || !navigator.credentials) return undefined
+
+    const controller = new AbortController()
+    navigator.credentials.get({
+      otp: { transport: ['sms'] },
+      signal: controller.signal,
+    }).then((credential) => {
+      const code = credential?.code?.replace(/\D/g, '').slice(0, 6)
+      if (code) setOtp(code)
+    }).catch(() => {})
+
+    return () => controller.abort()
+  }, [step])
+
+  function fillOtp(value, startIndex = 0) {
+    const digits = value.replace(/\D/g, '').slice(0, 6)
+    if (!digits) return
+
+    const next = otpDigits.map((digit) => digit.trim())
+    digits.split('').forEach((digit, offset) => {
+      const target = startIndex + offset
+      if (target < 6) next[target] = digit
+    })
+
+    setOtp(next.join('').slice(0, 6))
+    window.setTimeout(() => {
+      const focusIndex = Math.min(startIndex + digits.length, 5)
+      otpInputs.current[focusIndex]?.focus()
+    }, 0)
+  }
+
+  function changeOtpDigit(index, value) {
+    if (value.length > 1) {
+      fillOtp(value, index)
+      return
+    }
+
+    const digit = value.replace(/\D/g, '')
+    const next = otpDigits.map((item) => item.trim())
+    next[index] = digit
+    setOtp(next.join('').slice(0, 6))
+
+    if (digit && index < 5) {
+      otpInputs.current[index + 1]?.focus()
+    }
+  }
+
+  function handleOtpKeyDown(index, event) {
+    if (event.key !== 'Backspace') return
+    if (otpDigits[index].trim()) return
+
+    event.preventDefault()
+    const next = otpDigits.map((item) => item.trim())
+    if (index > 0) {
+      next[index - 1] = ''
+      setOtp(next.join('').slice(0, 6))
+      otpInputs.current[index - 1]?.focus()
+    }
+  }
 
   async function submitPhone(event) {
     event.preventDefault()
@@ -669,18 +735,7 @@ function RegisterPage() {
     setLoading(true)
     setStatus('')
     try {
-      const result = await requestPhoneOtp(fullPhone)
-      if (result.devUserId) {
-        await saveRegistrationProfile({
-          userId: result.devUserId,
-          phone: result.phone || fullPhone,
-          countryName: country.name,
-          countryCode: country.code,
-        })
-        navigate('/chats')
-        return
-      }
-
+      await requestPhoneOtp(fullPhone)
       setStep('otp')
       setStatus('Code sent. Check your phone for the SMS verification code.')
     } catch (error) {
@@ -747,7 +802,27 @@ function RegisterPage() {
           <form className="register-form" onSubmit={submitOtp}>
             <label>
               <span>Verification code</span>
-              <input className="otp-input" value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" maxLength="6" placeholder="SMS code" />
+              <div className="otp-grid" onPaste={(event) => {
+                event.preventDefault()
+                fillOtp(event.clipboardData.getData('text'))
+              }}>
+                {otpDigits.map((digit, index) => (
+                  <input
+                    aria-label={`Code digit ${index + 1}`}
+                    autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                    className="otp-box"
+                    inputMode="numeric"
+                    key={index}
+                    maxLength="1"
+                    onChange={(event) => changeOtpDigit(index, event.target.value)}
+                    onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                    pattern="[0-9]*"
+                    ref={(element) => { otpInputs.current[index] = element }}
+                    type="text"
+                    value={digit.trim()}
+                  />
+                ))}
+              </div>
             </label>
             <button type="submit" disabled={loading}>{loading ? 'Verifying...' : 'Verify and continue'}</button>
             <button className="text-button" type="button" onClick={() => setStep('phone')}>Change number</button>

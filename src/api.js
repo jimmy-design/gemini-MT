@@ -529,17 +529,6 @@ export async function requestPhoneOtp(phone) {
     options: { channel: 'sms' },
   })
 
-  const message = error?.message?.toLowerCase() || ''
-  const canUseDevPhoneLogin = devPhoneLoginEnabled && (
-    message.includes('unsupported phone provider') ||
-    message.includes('phone provider') ||
-    message.includes('sms')
-  )
-
-  if (canUseDevPhoneLogin) {
-    return signInWithDevPhone(client, phone)
-  }
-
   if (error?.message?.toLowerCase().includes('unsupported phone provider')) {
     throw new Error('Phone login is not ready yet. Enable Phone Auth and connect the MobileSasa Send SMS hook in Supabase Authentication > Hooks.')
   }

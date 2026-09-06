@@ -1064,6 +1064,32 @@ svg { width: 18px; height: 18px; display: block; }
   letter-spacing: 8px;
 }
 
+.otp-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.otp-box {
+  width: 100%;
+  aspect-ratio: 1;
+  height: auto;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 18px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 950;
+  color: #09231a;
+  background: #eef5f2;
+  box-shadow: inset 0 0 0 1px rgba(8, 122, 85, 0.08);
+}
+
+.otp-box:focus {
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(8, 122, 85, 0.16), inset 0 0 0 1px rgba(8, 122, 85, 0.34);
+}
+
 .register-form > button {
   min-height: 54px;
   border-radius: 18px;
