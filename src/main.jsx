@@ -669,7 +669,18 @@ function RegisterPage() {
     setLoading(true)
     setStatus('')
     try {
-      await requestPhoneOtp(fullPhone)
+      const result = await requestPhoneOtp(fullPhone)
+      if (result.devUserId) {
+        await saveRegistrationProfile({
+          userId: result.devUserId,
+          phone: result.phone || fullPhone,
+          countryName: country.name,
+          countryCode: country.code,
+        })
+        navigate('/chats')
+        return
+      }
+
       setStep('otp')
       setStatus('Code sent. Check your phone for the SMS verification code.')
     } catch (error) {

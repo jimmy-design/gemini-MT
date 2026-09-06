@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const devPhoneLoginEnabled = import.meta.env.VITE_ENABLE_DEV_PHONE_LOGIN === 'true'
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.')
@@ -182,6 +183,45 @@ async function getSignedInUser(client) {
   if (isMissingAuthSession(error)) return null
   if (error) throw error
   return data.user || null
+}
+
+function devEmailForPhone(phone) {
+  const digits = normalizePhone(phone).replace(/\D/g, '')
+  return `phone-${digits}@dev.wave.local`
+}
+
+function devPasswordForPhone(phone) {
+  const digits = normalizePhone(phone).replace(/\D/g, '')
+  return `Wave-dev-${digits}-2026!`
+}
+
+async function signInWithDevPhone(client, phone) {
+  const normalizedPhone = normalizePhone(phone)
+  const email = devEmailForPhone(normalizedPhone)
+  const password = devPasswordForPhone(normalizedPhone)
+
+  const signIn = await client.auth.signInWithPassword({ email, password })
+  if (signIn.data?.user) {
+    return { devUserId: signIn.data.user.id, phone: normalizedPhone }
+  }
+
+  const signUp = await client.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        phone: normalizedPhone,
+        wave_dev_phone_login: true,
+      },
+    },
+  })
+
+  if (signUp.error) throw signUp.error
+  if (!signUp.data?.session) {
+    throw new Error('Dev phone login created the auth user, but Supabase email confirmation is blocking the session. Disable email confirmations in Auth settings for local testing, or configure a real SMS provider.')
+  }
+
+  return { devUserId: signUp.data.user.id, phone: normalizedPhone }
 }
 
 export async function getAppData() {
@@ -488,6 +528,17 @@ export async function requestPhoneOtp(phone) {
     phone,
     options: { channel: 'sms' },
   })
+
+  const message = error?.message?.toLowerCase() || ''
+  const canUseDevPhoneLogin = devPhoneLoginEnabled && (
+    message.includes('unsupported phone provider') ||
+    message.includes('phone provider') ||
+    message.includes('sms')
+  )
+
+  if (canUseDevPhoneLogin) {
+    return signInWithDevPhone(client, phone)
+  }
 
   if (error?.message?.toLowerCase().includes('unsupported phone provider')) {
     throw new Error('Phone login is not ready in Supabase yet. Enable Phone Auth and connect an SMS provider like Twilio, MessageBird, Vonage, or TextLocal.')
