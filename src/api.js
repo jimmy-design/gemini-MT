@@ -173,13 +173,23 @@ function optionalSingleResult(result) {
   return result.data || null
 }
 
+function isMissingAuthSession(error) {
+  return error?.name === 'AuthSessionMissingError' || error?.message?.toLowerCase().includes('auth session missing')
+}
+
+async function getSignedInUser(client) {
+  const { data, error } = await client.auth.getUser()
+  if (isMissingAuthSession(error)) return null
+  if (error) throw error
+  return data.user || null
+}
+
 export async function getAppData() {
   const client = requireSupabase()
 
-  const { data: authData, error: authError } = await client.auth.getUser()
-  if (authError) throw authError
+  const user = await getSignedInUser(client)
 
-  if (!authData.user) {
+  if (!user) {
     return {
       needsRegistration: true,
       currentProfile: null,
@@ -196,7 +206,7 @@ export async function getAppData() {
   const { data: profile, error: profileError } = await client
     .from('profiles')
     .select('*')
-    .eq('auth_user_id', authData.user.id)
+    .eq('auth_user_id', user.id)
     .maybeSingle()
 
   if (profileError) throw profileError
@@ -232,7 +242,7 @@ export async function getAppData() {
     client.from('communities').select('*').order('created_at', { ascending: false }),
     client.from('user_contacts').select('device_name, device_phone_number, profile:contact_profile_id(*)').eq('owner_profile_id', profile.id).order('matched_at', { ascending: false }),
     client.from('marketplace_items').select('*').order('created_at', { ascending: false }),
-    client.from('user_settings').select('*').eq('auth_user_id', authData.user.id).limit(1).maybeSingle(),
+    client.from('user_settings').select('*').eq('auth_user_id', user.id).limit(1).maybeSingle(),
   ])
 
   const membershipsError = tableIsMissing(memberships.error) ? null : memberships.error
@@ -259,14 +269,13 @@ export async function getAppData() {
 
 export async function getCurrentProfile() {
   const client = requireSupabase()
-  const { data: authData, error: authError } = await client.auth.getUser()
-  if (authError) throw authError
-  if (!authData.user) return null
+  const user = await getSignedInUser(client)
+  if (!user) return null
 
   const { data, error } = await client
     .from('profiles')
     .select('*')
-    .eq('auth_user_id', authData.user.id)
+    .eq('auth_user_id', user.id)
     .maybeSingle()
 
   if (error) throw error
@@ -455,14 +464,13 @@ export async function startDirectConversation(contactProfileId) {
 
 export async function updateUserSettings(values) {
   const client = requireSupabase()
-  const { data: sessionData, error: sessionError } = await client.auth.getUser()
-  if (sessionError) throw sessionError
-  if (!sessionData.user?.id) throw new Error('Register your phone before changing settings.')
+  const user = await getSignedInUser(client)
+  if (!user?.id) throw new Error('Register your phone before changing settings.')
 
   const { error } = await client
     .from('user_settings')
     .upsert({
-      auth_user_id: sessionData.user.id,
+      auth_user_id: user.id,
       screen_lock: values.screenLock,
       read_receipts: values.readReceipts,
       live_location: values.liveLocation,
