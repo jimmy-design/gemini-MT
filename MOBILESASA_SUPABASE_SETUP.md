@@ -31,6 +31,8 @@ supabase secrets set SEND_SMS_HOOK_SECRET=your-random-hook-signing-secret
 
 `SEND_SMS_HOOK_SECRET` should match the signing secret configured for the Supabase Auth hook.
 
+Supabase Auth Hooks are still marked beta in the dashboard. Some HTTP hook calls may arrive without Standard Webhooks signature headers, so the function logs a warning and continues when those headers are missing.
+
 ## 3. Enable Phone Auth
 
 In Supabase Dashboard:

@@ -58,6 +58,15 @@ function formatPhoneForMobileSasa(phone: string) {
 async function verifyHookRequest(request: Request, body: string) {
   if (!rawHookSecret) return
 
+  const hasWebhookHeaders = request.headers.has('webhook-id') &&
+    request.headers.has('webhook-timestamp') &&
+    request.headers.has('webhook-signature')
+
+  if (!hasWebhookHeaders) {
+    console.warn('Supabase auth hook request did not include Standard Webhooks headers; continuing because Auth Hooks may omit them.')
+    return
+  }
+
   const normalizedSecret = rawHookSecret.trim().startsWith('v1,')
     ? rawHookSecret.trim().slice(3)
     : rawHookSecret.trim()
