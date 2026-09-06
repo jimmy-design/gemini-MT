@@ -178,6 +178,38 @@ function isMissingAuthSession(error) {
   return error?.name === 'AuthSessionMissingError' || error?.message?.toLowerCase().includes('auth session missing')
 }
 
+function readableError(error, fallback = 'Something went wrong. Try again.') {
+  if (!error) return fallback
+  if (typeof error === 'string') return error
+
+  const message = error.message || error.error_description || error.error
+  if (message && message !== '{}') return message
+
+  try {
+    const serialized = JSON.stringify(error)
+    if (serialized && serialized !== '{}') return serialized
+  } catch (_error) {
+    // Ignore serialization errors and use the fallback below.
+  }
+
+  return fallback
+}
+
+function phoneOtpError(error) {
+  const message = readableError(error, '')
+  const lowerMessage = message.toLowerCase()
+
+  if (lowerMessage.includes('unsupported phone provider')) {
+    return 'Phone login is not ready yet. Enable Phone Auth and connect the MobileSasa Send SMS hook in Supabase Authentication > Hooks.'
+  }
+
+  if (!message || message === '{}') {
+    return 'Supabase could not send the OTP. Check the Send SMS hook endpoint, hook secret, Edge Function deployment, and MobileSasa secrets.'
+  }
+
+  return message
+}
+
 async function getSignedInUser(client) {
   const { data, error } = await client.auth.getUser()
   if (isMissingAuthSession(error)) return null
@@ -528,11 +560,10 @@ export async function requestPhoneOtp(phone) {
     phone,
   })
 
-  if (error?.message?.toLowerCase().includes('unsupported phone provider')) {
-    throw new Error('Phone login is not ready yet. Enable Phone Auth and connect the MobileSasa Send SMS hook in Supabase Authentication > Hooks.')
+  if (error) {
+    throw new Error(phoneOtpError(error))
   }
 
-  if (error) throw error
   return { ok: true }
 }
 
