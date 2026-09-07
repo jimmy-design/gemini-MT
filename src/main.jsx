@@ -32,7 +32,7 @@ import {
   VideoOff,
   VolumeX,
 } from 'lucide-react'
-import { createChannel, endCallSession, findRegisteredContactByPhone, getAppData, getMessages, markConversationRead, markOnline, requestPhoneOtp, saveRegistrationProfile, sendMessage, sendVoiceMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToChannel, subscribeToMessages, subscribeToPresence, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
+import { createChannel, endCallSession, findRegisteredContactByPhone, getAppData, getMessages, markConversationRead, markOnline, requestPhoneOtp, saveRegistrationProfile, sendMessage, sendVoiceMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToChannel, subscribeToMessages, subscribeToPresence, subscribeToTyping, subscribeToUnreadCounts, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -1454,9 +1454,33 @@ function AppFrame() {
   useEffect(() => {
     if (!appData) return
     getMessages(activeId).then(setMessages).catch((error) => setLoadError(error.message))
-    clearUnreadLocally(activeId)
-    markConversationRead(activeId).catch((error) => console.warn(error.message))
-  }, [activeId, Boolean(appData)])
+    if (params.chatId) {
+      clearUnreadLocally(activeId)
+      markConversationRead(activeId).catch((error) => console.warn(error.message))
+    }
+  }, [activeId, Boolean(appData), params.chatId])
+
+  useEffect(() => {
+    if (!appData?.currentProfile) return undefined
+
+    let active = true
+    let unsubscribe = () => {}
+
+    subscribeToUnreadCounts(() => {
+      if (active) loadAppData().catch((error) => console.warn(error.message))
+    }, (error) => console.warn(error.message)).then((cleanup) => {
+      if (active) {
+        unsubscribe = cleanup
+      } else {
+        cleanup()
+      }
+    }).catch((error) => console.warn(error.message))
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [appData?.currentProfile?.id])
 
   useEffect(() => {
     if (!appData || !activeId) return undefined
@@ -1468,6 +1492,10 @@ function AppFrame() {
       if (!active) return
 
       setMessages((current) => mergeMessageList(current, message))
+      if (params.chatId) {
+        clearUnreadLocally(activeId)
+        markConversationRead(activeId).catch((error) => console.warn(error.message))
+      }
       setAppData((currentData) => {
         if (!currentData) return currentData
 

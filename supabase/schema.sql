@@ -95,8 +95,11 @@ create table if not exists public.conversation_members (
   conversation_id uuid not null references public.conversations(id) on delete cascade,
   profile_id uuid not null references public.profiles(id) on delete cascade,
   role text not null default 'member' check (role in ('member', 'admin', 'owner')),
+  unread_count integer not null default 0,
   joined_at timestamptz not null default now()
 );
+
+alter table public.conversation_members add column if not exists unread_count integer not null default 0;
 
 create unique index if not exists conversation_members_unique_profile
 on public.conversation_members(conversation_id, profile_id);
@@ -245,6 +248,7 @@ drop policy if exists "members insert own typing indicators" on public.typing_in
 drop policy if exists "members update own typing indicators" on public.typing_indicators;
 drop policy if exists "users read own conversation members" on public.conversation_members;
 drop policy if exists "users insert own conversation members" on public.conversation_members;
+drop policy if exists "users update own conversation members" on public.conversation_members;
 drop policy if exists "users read own matched contacts" on public.user_contacts;
 drop policy if exists "users insert own matched contacts" on public.user_contacts;
 drop policy if exists "users update own matched contacts" on public.user_contacts;
@@ -345,6 +349,19 @@ create policy "users read own conversation members" on public.conversation_membe
   )
 );
 create policy "users insert own conversation members" on public.conversation_members for insert with check (true);
+create policy "users update own conversation members" on public.conversation_members for update using (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = conversation_members.profile_id
+    and profiles.auth_user_id = auth.uid()
+  )
+) with check (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = conversation_members.profile_id
+    and profiles.auth_user_id = auth.uid()
+  )
+);
 create policy "users read own matched contacts" on public.user_contacts for select using (
   exists (
     select 1 from public.profiles
@@ -460,3 +477,38 @@ create policy "users insert own settings" on public.user_settings for insert wit
 create policy "users update own settings" on public.user_settings for update using (auth.uid() = auth_user_id);
 create policy "authenticated upload voice notes" on storage.objects for insert with check (bucket_id = 'voice-notes' and auth.uid() is not null);
 create policy "public read voice notes" on storage.objects for select using (bucket_id = 'voice-notes');
+
+create or replace function public.bump_unread_for_message()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.conversation_members
+  set unread_count = unread_count + 1
+  where conversation_id = new.conversation_id
+    and (
+      new.sender_profile_id is null
+      or profile_id <> new.sender_profile_id
+    );
+
+  update public.conversations
+  set
+    preview = case
+      when new.type = 'voice' then coalesce('Voice note - ' || new.duration, 'Voice note')
+      when new.type = 'media' then coalesce(new.caption, new.body)
+      else new.body
+    end,
+    last_message_at = new.created_at
+  where id = new.conversation_id;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists messages_bump_unread on public.messages;
+create trigger messages_bump_unread
+after insert on public.messages
+for each row
+execute function public.bump_unread_for_message();

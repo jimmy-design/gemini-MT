@@ -350,10 +350,11 @@ export async function getAppData() {
 
   const memberships = await client
     .from('conversation_members')
-    .select('conversation_id')
+    .select('conversation_id, unread_count')
     .eq('profile_id', profile.id)
 
   const conversationIds = optionalResult(memberships).map((item) => item.conversation_id)
+  const unreadByConversation = new Map(optionalResult(memberships).map((item) => [item.conversation_id, item.unread_count || 0]))
   const conversationsQuery = conversationIds.length
     ? client.from('conversations').select('*').in('id', conversationIds).order('pinned', { ascending: false }).order('last_message_at', { ascending: false })
     : Promise.resolve({ data: [], error: null })
@@ -421,6 +422,8 @@ export async function getAppData() {
       members: otherMembers.map(mapProfile),
       status: onlineMember ? 'online' : mapped.status,
       lastSeen: onlineMember ? 'online now' : latestSeen ? `last seen ${formatTime(latestSeen)}` : mapped.lastSeen,
+      unread: unreadByConversation.get(conversation.id) || 0,
+      unreadText: formatUnread(unreadByConversation.get(conversation.id) || 0),
       subscriberCount: subscriberCounts.get(conversation.id) || mapped.subscriberCount,
     }
   })
@@ -477,13 +480,40 @@ export async function getMessages(conversationId) {
 export async function markConversationRead(conversationId) {
   const client = requireSupabase()
   if (!conversationId) return
+  const profile = await getCurrentProfile()
+  if (!profile) return
 
   const { error } = await client
-    .from('conversations')
+    .from('conversation_members')
     .update({ unread_count: 0 })
-    .eq('id', conversationId)
+    .eq('conversation_id', conversationId)
+    .eq('profile_id', profile.id)
 
   if (error) throw error
+}
+
+export async function subscribeToUnreadCounts(onChange, onError) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) return () => {}
+
+  const channel = client
+    .channel(`unread-counts:${profile.id}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'conversation_members',
+      filter: `profile_id=eq.${profile.id}`,
+    }, () => onChange?.())
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onError?.(new Error('Live unread connection dropped.'))
+      }
+    })
+
+  return () => {
+    client.removeChannel(channel)
+  }
 }
 
 export async function markOnline(status = 'online') {
