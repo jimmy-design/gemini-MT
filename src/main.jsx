@@ -32,7 +32,7 @@ import {
   VideoOff,
   VolumeX,
 } from 'lucide-react'
-import { endCallSession, findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToMessages, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
+import { createChannel, endCallSession, findRegisteredContactByPhone, getAppData, getMessages, markOnline, requestPhoneOtp, saveRegistrationProfile, sendMessage, sendVoiceMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToChannel, subscribeToMessages, subscribeToPresence, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -48,8 +48,8 @@ if ('serviceWorker' in navigator && import.meta.env.DEV) {
   })
 }
 
-const navItems = ['Chats', 'Status', 'Calls', 'Communities', 'Marketplace', 'Settings']
-const mobileNavItems = ['Contacts', 'Calls', 'Chats', 'Marketplace', 'Settings']
+const navItems = ['Chats', 'Channels', 'Status', 'Calls', 'Communities', 'Marketplace', 'Settings']
+const mobileNavItems = ['Contacts', 'Calls', 'Chats', 'Channels', 'Settings']
 const filters = ['All', 'Unread', 'Favorites', 'Groups', 'Channels']
 const quickReplies = ['Looks beautiful', 'Call in 10?', 'Send location', 'I can help with that']
 const tools = ['Camera', 'Gallery', 'Document', 'Audio', 'Location', 'Contact', 'Poll', 'Payment']
@@ -97,6 +97,7 @@ const navIcons = {
   Contacts: UserRound,
   Chats: MessageCircleMore,
   Status: CircleDotDashed,
+  Channels: Globe2,
   Calls: Phone,
   Communities: Users,
   Marketplace: Store,
@@ -106,6 +107,7 @@ const routeByView = {
   Contacts: '/contacts',
   Chats: '/chats',
   Status: '/status',
+  Channels: '/channels',
   Calls: '/calls',
   Communities: '/communities',
   Marketplace: '/marketplace',
@@ -115,6 +117,7 @@ const viewByPath = {
   contacts: 'Contacts',
   chats: 'Chats',
   status: 'Status',
+  channels: 'Channels',
   calls: 'Calls',
   communities: 'Communities',
   marketplace: 'Marketplace',
@@ -199,15 +202,16 @@ function AppHeader({ view, setView, searchOpen, setSearchOpen, conversations, op
   )
 }
 
-function BottomNav({ view, setView }) {
+function BottomNav({ view, setView, unreadTotal = 0 }) {
   const viewForItem = (item) => item === 'Contacts' ? 'Contacts' : item
+  const unreadLabel = unreadTotal > 999 ? `${(unreadTotal / 1000).toFixed(1)}K` : String(unreadTotal)
 
   return (
     <nav className="bottom-nav" aria-label="Mobile menu">
       {mobileNavItems.map((item) => (
         <button className={view === viewForItem(item) ? 'active' : ''} key={item} onClick={() => setView(viewForItem(item))}>
           <span className={`nav-icon nav-${item.toLowerCase()}`}>{ReactNavIcon(item)}</span>
-          {item === 'Chats' && <b>192</b>}
+          {item === 'Chats' && unreadTotal > 0 && <b>{unreadLabel}</b>}
           {item}
         </button>
       ))}
@@ -302,7 +306,13 @@ function MessageBubble({ message }) {
     <div className={`message-row ${message.from} ${message.pending ? 'pending' : ''} ${message.failed ? 'failed' : ''}`}>
       <div className={`message-bubble ${message.type}`}>
         {message.type === 'media' && <div className="media-grid"><span /><span /><span /></div>}
-        {message.type === 'voice' && <div className="voice-note"><button type="button"><Icon name="mic" /></button><div><i /><i /><i /><i /><i /><i /></div><strong>{message.length}</strong></div>}
+        {message.type === 'voice' && (
+          <div className="voice-note">
+            <button type="button" aria-label="Voice note"><Icon name="mic" /></button>
+            {message.mediaUrl ? <audio controls src={message.mediaUrl} /> : <div><i /><i /><i /><i /><i /><i /></div>}
+            <strong>{message.length}</strong>
+          </div>
+        )}
         {message.type === 'text' && <p>{message.text}</p>}
         {message.type === 'media' && <p>{message.caption}</p>}
         <small className="message-meta">{message.time}{message.from === 'me' && message.seen && <span className="seen"> <Icon name="check" /></span>}</small>
@@ -320,8 +330,14 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
   const [whisper, setWhisper] = useState('')
   const [privacyMode, setPrivacyMode] = useState('Standard')
   const [sending, setSending] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
   const typingTimer = useRef(null)
   const lastTypingState = useRef(false)
+  const recorderRef = useRef(null)
+  const recordChunksRef = useRef([])
+  const recordStartedAtRef = useRef(0)
+  const recordTimerRef = useRef(null)
   const isTyping = typingUsers.length > 0
   const typingLabel = typingUsers.length > 1
     ? `${typingUsers.length} people are typing...`
@@ -361,6 +377,11 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
       }
     }
   }, [active?.id])
+
+  useEffect(() => () => {
+    window.clearInterval(recordTimerRef.current)
+    recorderRef.current?.stream?.getTracks().forEach((track) => track.stop())
+  }, [])
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ block: 'end' })
@@ -417,6 +438,89 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
   async function toggleEmojis() {
     await lightTap()
     setShowEmojis((value) => !value)
+  }
+
+  async function toggleVoiceRecording() {
+    if (recording) {
+      recorderRef.current?.stop()
+      return
+    }
+
+    if (!active?.id || sending) return
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setMessages((current) => [...current, {
+        id: `voice-error-${Date.now()}`,
+        from: 'me',
+        type: 'text',
+        text: 'Voice recording needs the installed app or an HTTPS preview.',
+        time: 'not sent',
+        seen: false,
+        reactions: [],
+        failed: true,
+      }])
+      return
+    }
+
+    try {
+      await lightTap()
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      recordChunksRef.current = []
+      recordStartedAtRef.current = Date.now()
+      recorderRef.current = recorder
+      setRecordingSeconds(0)
+      setRecording(true)
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordChunksRef.current.push(event.data)
+      }
+
+      recorder.onstop = async () => {
+        window.clearInterval(recordTimerRef.current)
+        stream.getTracks().forEach((track) => track.stop())
+        setRecording(false)
+        const duration = Math.max(1, (Date.now() - recordStartedAtRef.current) / 1000)
+        const blob = new Blob(recordChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        if (!blob.size) return
+
+        const optimisticId = `voice-pending-${Date.now()}`
+        setMessages((current) => [...current, {
+          id: optimisticId,
+          from: 'me',
+          type: 'voice',
+          length: `${Math.round(duration)}s`,
+          mediaUrl: URL.createObjectURL(blob),
+          time: 'now',
+          seen: false,
+          reactions: [],
+          pending: true,
+        }])
+
+        try {
+          const saved = await sendVoiceMessage(active.id, blob, duration)
+          setMessages((current) => current.map((message) => message.id === optimisticId ? saved : message))
+        } catch (_error) {
+          setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false, failed: true, time: 'not sent' } : message))
+        }
+      }
+
+      recorder.start()
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds(Math.floor((Date.now() - recordStartedAtRef.current) / 1000))
+      }, 250)
+    } catch (error) {
+      setRecording(false)
+      setMessages((current) => [...current, {
+        id: `voice-error-${Date.now()}`,
+        from: 'me',
+        type: 'text',
+        text: error?.message || 'Could not start voice recording.',
+        time: 'not sent',
+        seen: false,
+        reactions: [],
+        failed: true,
+      }])
+    }
   }
 
   return (
@@ -504,7 +608,9 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
         {draft.trim() ? (
           <button className="send-button" aria-label="Send message" disabled={sending}>{sending ? '...' : <Icon name="send" />}</button>
         ) : (
-          <button className="mic-button" type="button" aria-label="Record voice note"><Icon name="mic" /></button>
+          <button className={`mic-button ${recording ? 'recording' : ''}`} type="button" aria-label={recording ? 'Send voice note' : 'Record voice note'} onClick={toggleVoiceRecording}>
+            {recording ? <span>{recordingSeconds}s</span> : <Icon name="mic" />}
+          </button>
         )}
       </form>
     </section>
@@ -722,6 +828,68 @@ function CommunitiesPage({ communities }) {
             <span>{community.name.slice(0, 2)}</span>
             <strong>{community.name}</strong>
             <small>{community.members} members - {community.groups} groups</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ChannelsPage({ channels, refreshAppData, openChat }) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [status, setStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function createNewChannel(event) {
+    event.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setStatus('')
+    try {
+      const channel = await createChannel({ name, description })
+      await refreshAppData()
+      setName('')
+      setDescription('')
+      openChat(channel.id)
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function followChannel(channelId) {
+    setSaving(true)
+    setStatus('')
+    try {
+      await subscribeToChannel(channelId)
+      await refreshAppData()
+      openChat(channelId)
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="content-page channels-page">
+      <PageTitle title="Channels" text="Broadcast updates to followers, publish voice notes, and keep subscribers in sync." />
+      <form className="channel-composer" onSubmit={createNewChannel}>
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Channel name" aria-label="Channel name" />
+        <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is this channel about?" aria-label="Channel description" />
+        <button type="submit" disabled={saving}>{saving ? 'Creating...' : 'Create'}</button>
+      </form>
+      {status && <div className="register-status">{status}</div>}
+      <div className="channel-grid">
+        {channels.length === 0 && <EmptyState title="No channels yet" text="Create a channel and it will become a real Supabase conversation." />}
+        {channels.map((channel) => (
+          <button className="channel-card" type="button" key={channel.id} disabled={saving} onClick={() => followChannel(channel.id)}>
+            <Avatar person={channel} />
+            <strong>{channel.name}</strong>
+            <small>{channel.preview}</small>
+            <span>{channel.subscribed ? 'Subscribed' : 'Tap to subscribe'} - {channel.subscriberCount || 0} subscriber{(channel.subscriberCount || 0) === 1 ? '' : 's'}</span>
           </button>
         ))}
       </div>
@@ -1226,6 +1394,40 @@ function AppFrame() {
   }, [])
 
   useEffect(() => {
+    if (!appData?.currentProfile) return undefined
+
+    let stopped = false
+    let unsubscribe = () => {}
+
+    function heartbeat() {
+      if (!stopped) markOnline(document.hidden ? 'away' : 'online').catch((error) => console.warn(error.message))
+    }
+
+    heartbeat()
+    const interval = window.setInterval(heartbeat, 25000)
+    document.addEventListener('visibilitychange', heartbeat)
+
+    const watchedProfileIds = appData.conversations
+      .flatMap((conversation) => conversation.members || [])
+      .map((member) => member.id)
+
+    subscribeToPresence(watchedProfileIds, () => {
+      if (!stopped) loadAppData().catch((error) => console.warn(error.message))
+    }, (error) => console.warn(error.message)).then((cleanup) => {
+      if (stopped) cleanup()
+      else unsubscribe = cleanup
+    }).catch((error) => console.warn(error.message))
+
+    return () => {
+      stopped = true
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', heartbeat)
+      markOnline('offline').catch((error) => console.warn(error.message))
+      unsubscribe()
+    }
+  }, [appData?.currentProfile?.id])
+
+  useEffect(() => {
     if (!appData) return
     getMessages(activeId).then(setMessages).catch((error) => setLoadError(error.message))
   }, [activeId, Boolean(appData)])
@@ -1304,6 +1506,8 @@ function AppFrame() {
     lastSeen: 'Create a conversation in Supabase',
     labels: [],
   }
+  const channelConversations = appData.channels || appData.conversations.filter((item) => item.channel)
+  const unreadTotal = appData.conversations.reduce((total, item) => total + (item.unread || 0), 0)
 
   return (
     <main className={`app-shell ${mobileChatOpen ? 'mobile-chat-open' : ''} ${view !== 'Chats' ? 'section-page-open' : ''} page-${view.toLowerCase()}`}>
@@ -1321,6 +1525,7 @@ function AppFrame() {
         openRegister={() => navigate('/register')}
       />
       {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} backUnread={appData.conversations.reduce((total, item) => total + (item.id === active.id ? 0 : item.unread || 0), 0)} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} onStartCall={beginCall} />}
+      {view === 'Channels' && <ChannelsPage channels={channelConversations} refreshAppData={loadAppData} openChat={(chatId) => navigate(`/chats/${chatId}`)} />}
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
       {view === 'Calls' && <CallsPage calls={appData.calls} conversations={appData.conversations} onStartCall={beginCall} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}
@@ -1328,7 +1533,7 @@ function AppFrame() {
       {view === 'Marketplace' && <MarketplacePage items={appData.marketplace} />}
       {view === 'Settings' && <SettingsPage settings={appData.settings} />}
       <DetailPanel active={active} />
-      <BottomNav view={view} setView={setView} />
+      <BottomNav view={view} setView={setView} unreadTotal={unreadTotal} />
       <CallOverlay call={activeCall} contact={callContact || active} onEnd={() => setActiveCall(null)} />
     </main>
   )

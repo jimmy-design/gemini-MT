@@ -552,6 +552,11 @@ svg { width: 18px; height: 18px; display: block; }
 .voice-note div { flex: 1; display: flex; align-items: center; gap: 5px; }
 .voice-note i { width: 100%; height: 3px; border-radius: 6px; background: #7ad79f; }
 .voice-note i:nth-child(2n) { height: 14px; }
+.voice-note audio {
+  flex: 1;
+  min-width: 160px;
+  height: 34px;
+}
 .voice-note strong { font-size: 12px; color: #405149; }
 
 .typing { gap: 8px; margin-top: 30px; }
@@ -738,6 +743,13 @@ svg { width: 18px; height: 18px; display: block; }
 }
 .composer button svg { width: 18px; height: 18px; }
 .composer .send-button { color: #082015; background: #00c781; }
+.composer .mic-button.recording {
+  width: 66px;
+  color: #fff;
+  background: #f04438;
+  font-size: 13px;
+  font-weight: 900;
+}
 
 .message-capsule .emoji-button {
   width: 34px;
@@ -874,7 +886,8 @@ svg { width: 18px; height: 18px; display: block; }
 .status-grid,
 .community-grid,
 .settings-grid,
-.market-grid {
+.market-grid,
+.channel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
@@ -945,6 +958,54 @@ svg { width: 18px; height: 18px; display: block; }
 .market-1 { background: linear-gradient(135deg, #ff6a88, #f6b73c); }
 .market-2 { background: linear-gradient(135deg, #9c6bff, #35b7f3); }
 .market-3 { background: linear-gradient(135deg, #10231d, #00c781); }
+
+.channel-composer {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(180px, 1.2fr) auto;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.channel-composer input {
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(20, 37, 31, 0.1);
+  border-radius: 16px;
+  color: #10231d;
+  background: rgba(16, 35, 29, 0.035);
+}
+
+.channel-composer button {
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 16px;
+  color: #fff;
+  background: #087a55;
+  font-weight: 900;
+}
+
+.channel-card {
+  min-height: 180px;
+  display: grid;
+  align-content: end;
+  justify-items: start;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 24px;
+  text-align: left;
+  color: #10231d;
+  background: linear-gradient(145deg, rgba(0, 199, 129, 0.12), rgba(53, 183, 243, 0.08));
+}
+
+.channel-card small {
+  color: #60706a;
+}
+
+.channel-card span:last-child {
+  color: #087a55;
+  font-size: 12px;
+  font-weight: 900;
+}
 
 .action-strip {
   gap: 10px;
@@ -1900,6 +1961,10 @@ svg { width: 18px; height: 18px; display: block; }
     background: linear-gradient(135deg, #00c781, #35b7f3);
   }
 
+  .bottom-nav .nav-channels {
+    background: linear-gradient(135deg, #35b7f3, #9c6bff);
+  }
+
   .bottom-nav .nav-marketplace {
     background: linear-gradient(135deg, #ff6a88, #f6b73c);
   }
@@ -2257,6 +2322,14 @@ svg { width: 18px; height: 18px; display: block; }
     display: grid;
   }
 
+  .mobile-chat-open .composer .mic-button.recording {
+    width: 66px;
+    color: #fff;
+    background: #f04438;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
   .content-page {
     min-height: calc(100vh - 0px);
     padding-bottom: calc(104px + env(safe-area-inset-bottom));
@@ -2268,6 +2341,10 @@ svg { width: 18px; height: 18px; display: block; }
   .contact-tools {
     grid-template-columns: 1fr;
     margin: 0 0 12px;
+  }
+
+  .channel-composer {
+    grid-template-columns: 1fr;
   }
 
   .calls-page {

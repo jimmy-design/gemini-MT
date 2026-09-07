@@ -69,6 +69,7 @@ function mapConversation(row) {
     group: row.type === 'group',
     channel: row.type === 'channel',
     labels: row.labels || [],
+    subscriberCount: row.subscriber_count || 0,
   }
 }
 
@@ -84,6 +85,7 @@ function mapMessage(row, currentProfileId) {
     text: row.body,
     caption: row.caption,
     length: row.duration,
+    mediaUrl: row.media_url,
     time: formatTime(row.created_at),
     seen: row.seen,
     reactions: row.reactions || [],
@@ -157,6 +159,11 @@ function mapTypingIndicator(row) {
     color: profile.color || 'mint',
     updatedAt: row.updated_at,
   }
+}
+
+function isRecentlyOnline(presence) {
+  if (!presence?.last_seen_at) return false
+  return Date.now() - new Date(presence.last_seen_at).getTime() < 45000
 }
 
 function mapMarketplaceItem(row) {
@@ -312,6 +319,7 @@ export async function getAppData() {
       calls: [],
       communities: [],
       contacts: [],
+      channels: [],
       marketplace: [],
       settings: null,
     }
@@ -334,6 +342,7 @@ export async function getAppData() {
       calls: [],
       communities: [],
       contacts: [],
+      channels: [],
       marketplace: [],
       settings: null,
     }
@@ -349,8 +358,12 @@ export async function getAppData() {
     ? client.from('conversations').select('*').in('id', conversationIds).order('pinned', { ascending: false }).order('last_message_at', { ascending: false })
     : Promise.resolve({ data: [], error: null })
 
-  const [conversations, statuses, calls, communities, contacts, marketplace, settings] = await Promise.all([
+  const [conversations, publicChannels, members, statuses, calls, communities, contacts, marketplace, settings] = await Promise.all([
     conversationsQuery,
+    client.from('conversations').select('*').eq('type', 'channel').order('last_message_at', { ascending: false }),
+    conversationIds.length
+      ? client.from('conversation_members').select('conversation_id, profile:profile_id(id, name, initials, color, status, last_seen)').in('conversation_id', conversationIds)
+      : Promise.resolve({ data: [], error: null }),
     client.from('status_updates').select('*').order('created_at', { ascending: false }),
     client.from('calls').select('*').order('created_at', { ascending: false }),
     client.from('communities').select('*').order('created_at', { ascending: false }),
@@ -361,17 +374,67 @@ export async function getAppData() {
 
   const membershipsError = tableIsMissing(memberships.error) ? null : memberships.error
   const contactsError = tableIsMissing(contacts.error) ? null : contacts.error
+  const membersError = tableIsMissing(members.error) ? null : members.error
   const marketplaceError = tableIsMissing(marketplace.error) ? null : marketplace.error
   const settingsError = tableIsMissing(settings.error) ? null : settings.error
-  const error = membershipsError || conversations.error || statuses.error || calls.error || communities.error || contactsError || marketplaceError || settingsError
+  const error = membershipsError || conversations.error || publicChannels.error || membersError || statuses.error || calls.error || communities.error || contactsError || marketplaceError || settingsError
   if (error) throw error
 
   const settingsRow = optionalSingleResult(settings)
+  const membersByConversation = optionalResult(members).reduce((grouped, item) => {
+    const list = grouped.get(item.conversation_id) || []
+    list.push(item.profile)
+    grouped.set(item.conversation_id, list)
+    return grouped
+  }, new Map())
+  const memberProfileIds = [...new Set(optionalResult(members).map((item) => item.profile?.id).filter(Boolean))]
+  const channelIds = requireResult(publicChannels).map((channel) => channel.id)
+  const [presences, subscriptions] = await Promise.all([
+    memberProfileIds.length
+      ? client.from('profile_presence').select('*').in('profile_id', memberProfileIds)
+      : Promise.resolve({ data: [], error: null }),
+    channelIds.length
+      ? client.from('channel_subscriptions').select('conversation_id').in('conversation_id', channelIds)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  const presenceError = tableIsMissing(presences.error) ? null : presences.error
+  const subscriptionsError = tableIsMissing(subscriptions.error) ? null : subscriptions.error
+  if (presenceError || subscriptionsError) throw presenceError || subscriptionsError
+
+  const presenceByProfile = new Map(optionalResult(presences).map((item) => [item.profile_id, item]))
+  const subscriberCounts = optionalResult(subscriptions).reduce((counts, item) => {
+    counts.set(item.conversation_id, (counts.get(item.conversation_id) || 0) + 1)
+    return counts
+  }, new Map())
+  const mappedConversations = requireResult(conversations).map((conversation) => {
+    const mapped = mapConversation(conversation)
+    const otherMembers = (membersByConversation.get(conversation.id) || []).filter((member) => member?.id !== profile.id)
+    const onlineMember = otherMembers.find((member) => isRecentlyOnline(presenceByProfile.get(member.id)))
+    const latestSeen = otherMembers
+      .map((member) => presenceByProfile.get(member.id)?.last_seen_at)
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+
+    return {
+      ...mapped,
+      members: otherMembers.map(mapProfile),
+      status: onlineMember ? 'online' : mapped.status,
+      lastSeen: onlineMember ? 'online now' : latestSeen ? `last seen ${formatTime(latestSeen)}` : mapped.lastSeen,
+      subscriberCount: subscriberCounts.get(conversation.id) || mapped.subscriberCount,
+    }
+  })
+  const mappedChannels = requireResult(publicChannels).map((conversation) => ({
+    ...mapConversation(conversation),
+    subscriberCount: subscriberCounts.get(conversation.id) || 0,
+    subscribed: conversationIds.includes(conversation.id),
+  }))
 
   return {
     needsRegistration: false,
     currentProfile: mapProfile(profile),
-    conversations: requireResult(conversations).map(mapConversation),
+    conversations: mappedConversations,
+    channels: mappedChannels,
     statuses: requireResult(statuses).map(mapStatus),
     calls: requireResult(calls).map(mapCall),
     communities: requireResult(communities),
@@ -409,6 +472,51 @@ export async function getMessages(conversationId) {
 
   if (error) throw error
   return data.map((message) => mapMessage(message, profile?.id))
+}
+
+export async function markOnline(status = 'online') {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) return
+
+  const now = new Date().toISOString()
+  const { error } = await client
+    .from('profile_presence')
+    .upsert({
+      profile_id: profile.id,
+      status,
+      last_seen_at: now,
+      updated_at: now,
+    }, { onConflict: 'profile_id' })
+
+  if (error) throw error
+}
+
+export async function subscribeToPresence(profileIds, onChange, onError) {
+  const client = requireSupabase()
+  const ids = [...new Set(profileIds || [])].filter(Boolean)
+  if (ids.length === 0) return () => {}
+
+  let channel = client.channel(`profile-presence:${ids.sort().join(':')}`)
+  ids.forEach((id) => {
+    channel = channel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'profile_presence',
+      filter: `profile_id=eq.${id}`,
+    }, () => onChange?.())
+  })
+
+  channel
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onError?.(new Error('Live presence connection dropped.'))
+      }
+    })
+
+  return () => {
+    client.removeChannel(channel)
+  }
 }
 
 export async function subscribeToMessages(conversationId, onMessage, onError) {
@@ -685,6 +793,53 @@ export async function sendMessage(conversationId, text) {
   return mapMessage(data, profile.id)
 }
 
+export async function sendVoiceMessage(conversationId, blob, durationSeconds) {
+  const client = requireSupabase()
+  if (!conversationId) throw new Error('Choose a conversation before sending a voice note.')
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before sending voice notes.')
+
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const extension = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('ogg') ? 'ogg' : 'webm'
+  const path = `${profile.id}/${conversationId}/${id}.${extension}`
+  const { error: uploadError } = await client.storage
+    .from('voice-notes')
+    .upload(path, blob, {
+      contentType: blob.type || 'audio/webm',
+      upsert: false,
+    })
+
+  if (uploadError) throw uploadError
+
+  const { data: publicUrl } = client.storage.from('voice-notes').getPublicUrl(path)
+  const duration = `${Math.max(1, Math.round(durationSeconds || 1))}s`
+
+  const { data, error } = await client
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      sender_profile_id: profile.id,
+      sender: 'me',
+      type: 'voice',
+      body: 'Voice note',
+      duration,
+      media_url: publicUrl.publicUrl,
+      seen: true,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+
+  const { error: updateError } = await client
+    .from('conversations')
+    .update({ preview: `Voice note - ${duration}`, last_message_at: new Date().toISOString() })
+    .eq('id', conversationId)
+
+  if (updateError) throw updateError
+  return mapMessage(data, profile.id)
+}
+
 export async function syncContactsToWave(deviceContacts) {
   const client = requireSupabase()
   const profile = await getCurrentProfile()
@@ -817,6 +972,76 @@ export async function startDirectConversation(contactProfileId) {
 
   if (membersError) throw membersError
   return conversation.id
+}
+
+export async function createChannel({ name, description }) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before creating channels.')
+
+  const cleanName = name.trim()
+  if (!cleanName) throw new Error('Enter a channel name.')
+  const handle = `@${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 28) || 'channel'}`
+
+  const { data: conversation, error } = await client
+    .from('conversations')
+    .insert({
+      name: cleanName,
+      handle,
+      initials: initialsFor(cleanName, 'CH'),
+      color: 'teal',
+      type: 'channel',
+      status: 'channel',
+      last_seen: 'broadcast channel',
+      preview: description?.trim() || 'New Wave channel',
+      labels: ['Channel'],
+      verified: false,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+
+  const [{ error: memberError }, { error: subscriptionError }] = await Promise.all([
+    client.from('conversation_members').insert({
+      conversation_id: conversation.id,
+      profile_id: profile.id,
+      role: 'owner',
+    }),
+    client.from('channel_subscriptions').insert({
+      conversation_id: conversation.id,
+      profile_id: profile.id,
+      notifications: 'all',
+    }),
+  ])
+
+  if (memberError) throw memberError
+  if (subscriptionError) throw subscriptionError
+  return mapConversation(conversation)
+}
+
+export async function subscribeToChannel(conversationId) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before joining channels.')
+
+  const [{ error: memberError }, { error: subscriptionError }] = await Promise.all([
+    client.from('conversation_members').upsert({
+      conversation_id: conversationId,
+      profile_id: profile.id,
+      role: 'member',
+      joined_at: new Date().toISOString(),
+    }, { onConflict: 'conversation_id,profile_id' }),
+    client.from('channel_subscriptions').upsert({
+      conversation_id: conversationId,
+      profile_id: profile.id,
+      notifications: 'all',
+      subscribed_at: new Date().toISOString(),
+    }, { onConflict: 'conversation_id,profile_id' }),
+  ])
+
+  if (memberError) throw memberError
+  if (subscriptionError) throw subscriptionError
 }
 
 export async function updateUserSettings(values) {

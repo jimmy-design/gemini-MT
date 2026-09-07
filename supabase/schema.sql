@@ -66,12 +66,21 @@ create table if not exists public.messages (
   body text not null,
   caption text,
   duration text,
+  media_url text,
   seen boolean not null default false,
   reactions text[] not null default '{}',
   created_at timestamptz not null default now()
 );
 
 alter table public.messages add column if not exists sender_profile_id uuid references public.profiles(id) on delete set null;
+alter table public.messages add column if not exists media_url text;
+
+create table if not exists public.profile_presence (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  status text not null default 'online' check (status in ('online', 'away', 'offline')),
+  last_seen_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.typing_indicators (
   conversation_id uuid not null references public.conversations(id) on delete cascade,
@@ -103,6 +112,17 @@ create table if not exists public.user_contacts (
 
 create unique index if not exists user_contacts_unique_match
 on public.user_contacts(owner_profile_id, contact_profile_id);
+
+create table if not exists public.channel_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  notifications text not null default 'all' check (notifications in ('all', 'mentions', 'muted')),
+  subscribed_at timestamptz not null default now()
+);
+
+create unique index if not exists channel_subscriptions_unique_profile
+on public.channel_subscriptions(conversation_id, profile_id);
 
 create table if not exists public.status_updates (
   id uuid primary key default gen_random_uuid(),
@@ -188,12 +208,18 @@ drop constraint if exists user_settings_auth_user_id_unique;
 alter table public.user_settings
 add constraint user_settings_auth_user_id_unique unique (auth_user_id);
 
+insert into storage.buckets (id, name, public)
+values ('voice-notes', 'voice-notes', true)
+on conflict (id) do update set public = true;
+
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
+alter table public.profile_presence enable row level security;
 alter table public.typing_indicators enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.user_contacts enable row level security;
+alter table public.channel_subscriptions enable row level security;
 alter table public.status_updates enable row level security;
 alter table public.calls enable row level security;
 alter table public.call_sessions enable row level security;
@@ -211,6 +237,9 @@ drop policy if exists "signed users insert conversations" on public.conversation
 drop policy if exists "signed users update conversations" on public.conversations;
 drop policy if exists "public read messages" on public.messages;
 drop policy if exists "public insert messages" on public.messages;
+drop policy if exists "public read profile presence" on public.profile_presence;
+drop policy if exists "users upsert own presence" on public.profile_presence;
+drop policy if exists "users update own presence" on public.profile_presence;
 drop policy if exists "members read typing indicators" on public.typing_indicators;
 drop policy if exists "members insert own typing indicators" on public.typing_indicators;
 drop policy if exists "members update own typing indicators" on public.typing_indicators;
@@ -219,6 +248,9 @@ drop policy if exists "users insert own conversation members" on public.conversa
 drop policy if exists "users read own matched contacts" on public.user_contacts;
 drop policy if exists "users insert own matched contacts" on public.user_contacts;
 drop policy if exists "users update own matched contacts" on public.user_contacts;
+drop policy if exists "public read channel subscriptions" on public.channel_subscriptions;
+drop policy if exists "users subscribe self to channels" on public.channel_subscriptions;
+drop policy if exists "users update own channel subscriptions" on public.channel_subscriptions;
 drop policy if exists "public read statuses" on public.status_updates;
 drop policy if exists "public read calls" on public.calls;
 drop policy if exists "signed users insert calls" on public.calls;
@@ -235,6 +267,8 @@ drop policy if exists "public read marketplace items" on public.marketplace_item
 drop policy if exists "users read own settings" on public.user_settings;
 drop policy if exists "users insert own settings" on public.user_settings;
 drop policy if exists "users update own settings" on public.user_settings;
+drop policy if exists "authenticated upload voice notes" on storage.objects;
+drop policy if exists "public read voice notes" on storage.objects;
 
 create policy "public read profiles" on public.profiles for select using (true);
 create policy "users insert own profile" on public.profiles for insert with check (auth.uid() = auth_user_id);
@@ -244,6 +278,27 @@ create policy "signed users insert conversations" on public.conversations for in
 create policy "signed users update conversations" on public.conversations for update using (auth.uid() is not null);
 create policy "public read messages" on public.messages for select using (true);
 create policy "public insert messages" on public.messages for insert with check (true);
+create policy "public read profile presence" on public.profile_presence for select using (true);
+create policy "users upsert own presence" on public.profile_presence for insert with check (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = profile_presence.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+);
+create policy "users update own presence" on public.profile_presence for update using (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = profile_presence.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+) with check (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = profile_presence.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+);
 create policy "members read typing indicators" on public.typing_indicators for select using (
   exists (
     select 1
@@ -309,6 +364,21 @@ create policy "users update own matched contacts" on public.user_contacts for up
     select 1 from public.profiles
     where profiles.id = user_contacts.owner_profile_id
     and profiles.auth_user_id = auth.uid()
+  )
+);
+create policy "public read channel subscriptions" on public.channel_subscriptions for select using (true);
+create policy "users subscribe self to channels" on public.channel_subscriptions for insert with check (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = channel_subscriptions.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+);
+create policy "users update own channel subscriptions" on public.channel_subscriptions for update using (
+  exists (
+    select 1 from public.profiles
+    where profiles.id = channel_subscriptions.profile_id
+      and profiles.auth_user_id = auth.uid()
   )
 );
 create policy "public read statuses" on public.status_updates for select using (true);
@@ -388,3 +458,5 @@ create policy "public read marketplace items" on public.marketplace_items for se
 create policy "users read own settings" on public.user_settings for select using (auth.uid() = auth_user_id);
 create policy "users insert own settings" on public.user_settings for insert with check (auth.uid() = auth_user_id);
 create policy "users update own settings" on public.user_settings for update using (auth.uid() = auth_user_id);
+create policy "authenticated upload voice notes" on storage.objects for insert with check (bucket_id = 'voice-notes' and auth.uid() is not null);
+create policy "public read voice notes" on storage.objects for select using (bucket_id = 'voice-notes');
