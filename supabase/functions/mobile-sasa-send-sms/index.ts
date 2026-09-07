@@ -9,10 +9,6 @@ type SmsHookEvent = {
   }
 }
 
-type EdgeRuntimeApi = {
-  waitUntil?: (promise: Promise<unknown>) => void
-}
-
 const mobileSasaToken = Deno.env.get('MOBILESASA_API_TOKEN')
 const mobileSasaBaseUrl = Deno.env.get('MOBILESASA_BASE_URL') || 'https://api.mobilesasa.com/v1/send/message'
 const mobileSasaSenderId = Deno.env.get('MOBILESASA_SENDER_ID') || 'EASTMATTOTP'
@@ -157,18 +153,7 @@ Deno.serve(async (request) => {
       return hookError('Missing phone number or OTP in Supabase SMS hook payload.')
     }
 
-    const sendTask = sendMobileSasaOtp(phone, otp).catch((error) => {
-      console.error(`MobileSasa background send failed: ${messageFromError(error)}`)
-    })
-
-    const edgeRuntime = (globalThis as typeof globalThis & { EdgeRuntime?: EdgeRuntimeApi }).EdgeRuntime
-
-    if (edgeRuntime?.waitUntil) {
-      edgeRuntime.waitUntil(sendTask)
-    } else {
-      await sendTask
-    }
-
+    await sendMobileSasaOtp(phone, otp)
     return new Response(null, { status: 200 })
   } catch (error) {
     return hookError(`Unhandled MobileSasa hook error: ${messageFromError(error)}`, 500)

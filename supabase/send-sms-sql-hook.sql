@@ -13,7 +13,7 @@ begin
     url := 'https://bbnnkrijpvkicwsmxthf.supabase.co/functions/v1/mobile-sasa-send-sms',
     body := event,
     headers := '{"Content-Type": "application/json"}'::jsonb,
-    timeout_milliseconds := 1000
+    timeout_milliseconds := 8000
   );
 
   return '{}'::jsonb;
