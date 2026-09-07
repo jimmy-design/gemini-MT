@@ -61,6 +61,36 @@ const countries = [
   { name: 'South Africa', code: '+27', example: '82 123 4567' },
   { name: 'India', code: '+91', example: '98765 43210' },
 ]
+const pendingPhoneVerificationKey = 'wave.pendingPhoneVerification'
+
+function readPendingPhoneVerification() {
+  try {
+    const saved = window.localStorage.getItem(pendingPhoneVerificationKey)
+    if (!saved) return null
+    const pending = JSON.parse(saved)
+    if (!pending?.countryCode || !pending?.localNumber) return null
+    return pending
+  } catch (_error) {
+    return null
+  }
+}
+
+function savePendingPhoneVerification(pending) {
+  try {
+    window.localStorage.setItem(pendingPhoneVerificationKey, JSON.stringify(pending))
+  } catch (_error) {
+    // Local persistence is only a convenience for returning from the SMS app.
+  }
+}
+
+function clearPendingPhoneVerification() {
+  try {
+    window.localStorage.removeItem(pendingPhoneVerificationKey)
+  } catch (_error) {
+    // Ignore storage cleanup failures.
+  }
+}
+
 const navIcons = {
   Contacts: UserRound,
   Chats: MessageCircleMore,
@@ -651,11 +681,13 @@ function SettingsPage({ settings }) {
 
 function RegisterPage() {
   const navigate = useNavigate()
-  const [country, setCountry] = useState(countries[0])
-  const [localNumber, setLocalNumber] = useState('')
+  const pendingVerification = useMemo(() => readPendingPhoneVerification(), [])
+  const initialCountry = countries.find((item) => item.code === pendingVerification?.countryCode) || countries[0]
+  const [country, setCountry] = useState(initialCountry)
+  const [localNumber, setLocalNumber] = useState(pendingVerification?.localNumber || '')
   const [otp, setOtp] = useState('')
-  const [step, setStep] = useState('phone')
-  const [status, setStatus] = useState('')
+  const [step, setStep] = useState(pendingVerification ? 'otp' : 'phone')
+  const [status, setStatus] = useState(pendingVerification ? 'Code sent. Enter the SMS verification code.' : '')
   const [loading, setLoading] = useState(false)
   const otpInputs = useRef([])
   const fullPhone = `${country.code}${localNumber.replace(/\D/g, '')}`
@@ -736,6 +768,13 @@ function RegisterPage() {
     setStatus('')
     try {
       await requestPhoneOtp(fullPhone)
+      savePendingPhoneVerification({
+        countryCode: country.code,
+        countryName: country.name,
+        localNumber,
+        phone: fullPhone,
+        sentAt: Date.now(),
+      })
       setStep('otp')
       setStatus('Code sent. Check your phone for the SMS verification code.')
     } catch (error) {
@@ -762,7 +801,30 @@ function RegisterPage() {
         countryName: country.name,
         countryCode: country.code,
       })
+      clearPendingPhoneVerification()
       navigate('/chats')
+    } catch (error) {
+      setStatus(error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function resendOtp() {
+    setLoading(true)
+    setStatus('')
+    try {
+      await requestPhoneOtp(fullPhone)
+      savePendingPhoneVerification({
+        countryCode: country.code,
+        countryName: country.name,
+        localNumber,
+        phone: fullPhone,
+        sentAt: Date.now(),
+      })
+      setOtp('')
+      setStatus('New code sent. Check your SMS messages.')
+      window.setTimeout(() => otpInputs.current[0]?.focus(), 120)
     } catch (error) {
       setStatus(error.message)
     } finally {
@@ -811,9 +873,11 @@ function RegisterPage() {
                     aria-label={`Code digit ${index + 1}`}
                     autoComplete={index === 0 ? 'one-time-code' : 'off'}
                     className="otp-box"
+                    enterKeyHint={index === 5 ? 'done' : 'next'}
                     inputMode="numeric"
                     key={index}
-                    maxLength="1"
+                    maxLength={index === 0 ? '6' : '1'}
+                    name={index === 0 ? 'one-time-code' : undefined}
                     onChange={(event) => changeOtpDigit(index, event.target.value)}
                     onKeyDown={(event) => handleOtpKeyDown(index, event)}
                     pattern="[0-9]*"
@@ -825,7 +889,13 @@ function RegisterPage() {
               </div>
             </label>
             <button type="submit" disabled={loading}>{loading ? 'Verifying...' : 'Verify and continue'}</button>
-            <button className="text-button" type="button" onClick={() => setStep('phone')}>Change number</button>
+            <button className="text-button" type="button" disabled={loading} onClick={resendOtp}>Resend code</button>
+            <button className="text-button" type="button" onClick={() => {
+              clearPendingPhoneVerification()
+              setOtp('')
+              setStep('phone')
+              setStatus('')
+            }}>Change number</button>
           </form>
         )}
 
