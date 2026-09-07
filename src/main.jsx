@@ -795,6 +795,7 @@ function RegisterPage() {
     setStatus('')
     try {
       const data = await verifyPhoneOtp(fullPhone, otp)
+      setStatus('Code confirmed. Opening Wave...')
       await saveRegistrationProfile({
         userId: data.user?.id,
         phone: fullPhone,

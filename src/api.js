@@ -210,6 +210,22 @@ function phoneOtpError(error) {
   return message
 }
 
+function otpVerificationError(error) {
+  const message = readableError(error, '')
+  const lowerMessage = message.toLowerCase()
+
+  if (
+    lowerMessage.includes('token has expired') ||
+    lowerMessage.includes('invalid') ||
+    lowerMessage.includes('otp') ||
+    lowerMessage.includes('code')
+  ) {
+    return 'Incorrect OTP. Check the SMS code and try again.'
+  }
+
+  return message || 'Could not verify the OTP. Try again.'
+}
+
 async function getSignedInUser(client) {
   const { data, error } = await client.auth.getUser()
   if (isMissingAuthSession(error)) return null
@@ -575,7 +591,8 @@ export async function verifyPhoneOtp(phone, token) {
     type: 'sms',
   })
 
-  if (error) throw error
+  if (error) throw new Error(otpVerificationError(error))
+  if (!data.user?.id) throw new Error('OTP verified, but Supabase did not return a signed-in user. Try requesting a new code.')
   return data
 }
 
@@ -585,27 +602,40 @@ export async function saveRegistrationProfile({ userId, phone, countryName, coun
 
   const normalizedPhone = normalizePhone(phone)
   const initials = normalizedPhone.slice(-2)
-  const { error } = await client
-    .from('profiles')
-    .upsert({
-      auth_user_id: userId,
-      phone_number: normalizedPhone,
-      country_name: countryName,
-      country_code: countryCode,
-      name: 'New Wave User',
-      handle: normalizedPhone,
-      initials,
-      color: 'mint',
-      status: 'online',
-      last_seen: 'online now',
-    }, { onConflict: 'auth_user_id' })
 
-  if (error) throw error
+  const profileValues = {
+    auth_user_id: userId,
+    phone_number: normalizedPhone,
+    country_name: countryName,
+    country_code: countryCode,
+    name: 'New Wave User',
+    handle: normalizedPhone,
+    initials,
+    color: 'mint',
+    status: 'online',
+    last_seen: 'online now',
+  }
+
+  const { data: existingProfile, error: existingError } = await client
+    .from('profiles')
+    .select('id')
+    .eq('auth_user_id', userId)
+    .maybeSingle()
+
+  if (existingError) throw new Error(readableError(existingError, 'Could not check your Wave profile.'))
+
+  const result = existingProfile
+    ? await client.from('profiles').update(profileValues).eq('id', existingProfile.id)
+    : await client.from('profiles').insert(profileValues)
+
+  const { error } = result
+
+  if (error) throw new Error(readableError(error, 'Could not save your Wave profile.'))
 
   const { error: settingsError } = await client
     .from('user_settings')
     .upsert({ auth_user_id: userId }, { onConflict: 'auth_user_id' })
 
-  if (settingsError) throw settingsError
+  if (settingsError) throw new Error(readableError(settingsError, 'Could not create your Wave settings.'))
   return { ok: true }
 }
