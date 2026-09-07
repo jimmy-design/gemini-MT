@@ -31,7 +31,11 @@ alter table public.profiles add column if not exists country_code text;
 alter table public.profiles add column if not exists verified boolean not null default false;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 
-create unique index if not exists profiles_auth_user_id_key on public.profiles(auth_user_id) where auth_user_id is not null;
+alter table public.profiles
+drop constraint if exists profiles_auth_user_id_unique;
+
+alter table public.profiles
+add constraint profiles_auth_user_id_unique unique (auth_user_id);
 create unique index if not exists profiles_phone_number_key on public.profiles(phone_number) where phone_number is not null;
 
 create table if not exists public.conversations (
@@ -136,7 +140,11 @@ create table if not exists public.user_settings (
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists user_settings_auth_user_id_key on public.user_settings(auth_user_id) where auth_user_id is not null;
+alter table public.user_settings
+drop constraint if exists user_settings_auth_user_id_unique;
+
+alter table public.user_settings
+add constraint user_settings_auth_user_id_unique unique (auth_user_id);
 
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;

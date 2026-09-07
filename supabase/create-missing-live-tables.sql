@@ -18,9 +18,11 @@ create table if not exists public.user_settings (
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists user_settings_auth_user_id_key
-on public.user_settings(auth_user_id)
-where auth_user_id is not null;
+alter table public.user_settings
+drop constraint if exists user_settings_auth_user_id_unique;
+
+alter table public.user_settings
+add constraint user_settings_auth_user_id_unique unique (auth_user_id);
 
 alter table public.marketplace_items enable row level security;
 alter table public.user_settings enable row level security;

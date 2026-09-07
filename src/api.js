@@ -555,18 +555,48 @@ export async function updateUserSettings(values) {
   const user = await getSignedInUser(client)
   if (!user?.id) throw new Error('Register your phone before changing settings.')
 
+  const { data: existingSettings, error: existingError } = await client
+    .from('user_settings')
+    .select('id')
+    .eq('auth_user_id', user.id)
+    .maybeSingle()
+
+  if (existingError) throw new Error(readableError(existingError, 'Could not check your Wave settings.'))
+
+  const settingsValues = {
+    auth_user_id: user.id,
+    screen_lock: values.screenLock,
+    read_receipts: values.readReceipts,
+    live_location: values.liveLocation,
+    chat_lock: values.chatLock,
+    updated_at: new Date().toISOString(),
+  }
+
+  const result = existingSettings
+    ? await client.from('user_settings').update(settingsValues).eq('id', existingSettings.id)
+    : await client.from('user_settings').insert(settingsValues)
+
+  const { error } = result
+
+  if (error) throw new Error(readableError(error, 'Could not save your Wave settings.'))
+  return { ok: true }
+}
+
+async function ensureUserSettings(client, userId) {
+  const { data: existingSettings, error: existingError } = await client
+    .from('user_settings')
+    .select('id')
+    .eq('auth_user_id', userId)
+    .maybeSingle()
+
+  if (existingError) throw new Error(readableError(existingError, 'Could not check your Wave settings.'))
+  if (existingSettings) return { ok: true }
+
   const { error } = await client
     .from('user_settings')
-    .upsert({
-      auth_user_id: user.id,
-      screen_lock: values.screenLock,
-      read_receipts: values.readReceipts,
-      live_location: values.liveLocation,
-      chat_lock: values.chatLock,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'auth_user_id' })
+    .insert({ auth_user_id: userId })
 
-  if (error) throw error
+  if (error) throw new Error(readableError(error, 'Could not create your Wave settings.'))
   return { ok: true }
 }
 
@@ -632,10 +662,6 @@ export async function saveRegistrationProfile({ userId, phone, countryName, coun
 
   if (error) throw new Error(readableError(error, 'Could not save your Wave profile.'))
 
-  const { error: settingsError } = await client
-    .from('user_settings')
-    .upsert({ auth_user_id: userId }, { onConflict: 'auth_user_id' })
-
-  if (settingsError) throw new Error(readableError(settingsError, 'Could not create your Wave settings.'))
+  await ensureUserSettings(client, userId)
   return { ok: true }
 }
