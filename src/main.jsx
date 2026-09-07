@@ -308,7 +308,7 @@ function MessageBubble({ message }) {
   )
 }
 
-function ChatPage({ active, messages, setMessages, closeChat, routeMode = false, typingUsers = [] }) {
+function ChatPage({ active, messages, setMessages, closeChat, routeMode = false, typingUsers = [], backUnread = 0 }) {
   const [draft, setDraft] = useState('')
   const [showTools, setShowTools] = useState(false)
   const [showEmojis, setShowEmojis] = useState(false)
@@ -322,6 +322,8 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
   const typingLabel = typingUsers.length > 1
     ? `${typingUsers.length} people are typing...`
     : `${typingUsers[0]?.name?.split(' ')[0] || active.name.split(' ')[0]} is typing...`
+  const messageEndRef = useRef(null)
+  const backUnreadLabel = backUnread > 999 ? `${(backUnread / 1000).toFixed(1)}K` : String(backUnread)
 
   function publishTyping(nextState) {
     if (!active?.id) return
@@ -355,6 +357,10 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
       }
     }
   }, [active?.id])
+
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [active?.id, messages.length, typingUsers.length])
 
   async function submitMessage(event) {
     event.preventDefault()
@@ -412,7 +418,7 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
   return (
     <section className="chat-panel page-panel">
       <header className="chat-header">
-        <button className="back-button" type="button" onClick={closeChat} aria-label="Back to chats"><Icon name="back" /><span>192</span></button>
+        <button className="back-button" type="button" onClick={closeChat} aria-label="Back to chats"><Icon name="back" />{backUnread > 0 && <span>{backUnreadLabel}</span>}</button>
         <div className="chat-person">
           <Avatar person={active} size="large" />
           <div>
@@ -448,6 +454,7 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
             <small>{typingLabel}</small>
           </div>
         )}
+        <div ref={messageEndRef} className="message-end" />
       </div>
 
       <div className="smart-replies">
@@ -1158,7 +1165,7 @@ function AppFrame() {
         openChat={(chatId) => navigate(`/chats/${chatId}`)}
         openRegister={() => navigate('/register')}
       />
-      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} />}
+      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} backUnread={appData.conversations.reduce((total, item) => total + (item.id === active.id ? 0 : item.unread || 0), 0)} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} />}
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
       {view === 'Calls' && <CallsPage calls={appData.calls} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}

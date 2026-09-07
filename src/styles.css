@@ -422,8 +422,11 @@ svg { width: 18px; height: 18px; display: block; }
 .message-area {
   flex: 1;
   overflow: auto;
-  padding: 26px clamp(18px, 8vw, 92px);
+  padding: 26px clamp(18px, 8vw, 92px) 118px;
+  scroll-behavior: smooth;
 }
+
+.message-end { height: 1px; }
 
 .date-divider { display: flex; justify-content: center; margin-bottom: 28px; }
 .date-divider span {
@@ -1874,7 +1877,7 @@ svg { width: 18px; height: 18px; display: block; }
     align-self: start;
     display: inline-flex;
     width: auto;
-    min-width: 72px;
+    min-width: 46px;
     height: 46px;
     gap: 3px;
     padding: 0 12px 0 8px;
@@ -1938,7 +1941,8 @@ svg { width: 18px; height: 18px; display: block; }
     position: relative;
     z-index: 1;
     min-height: 0;
-    padding: 52vh 14px 14px;
+    padding: 52vh 14px 112px;
+    scroll-padding-bottom: 112px;
   }
 
   .mobile-chat-open .date-divider {
@@ -1982,7 +1986,8 @@ svg { width: 18px; height: 18px; display: block; }
   }
 
   .mobile-chat-open .typing {
-    margin-top: 16px;
+    margin-top: 12px;
+    margin-bottom: 8px;
   }
 
   .media-grid { grid-template-rows: 64px 64px; }
