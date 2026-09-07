@@ -110,6 +110,20 @@ function mapCall(row) {
   }
 }
 
+function mapCallSession(row, currentProfileId) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    startedByProfileId: row.started_by_profile_id,
+    mode: row.mode,
+    status: row.status,
+    startedAt: row.started_at,
+    answeredAt: row.answered_at,
+    endedAt: row.ended_at,
+    isMine: row.started_by_profile_id === currentProfileId,
+  }
+}
+
 function mapProfile(row) {
   return {
     id: row.id,
@@ -501,6 +515,143 @@ export async function setTypingStatus(conversationId, isTyping) {
     })
 
   if (error) throw error
+}
+
+export async function startCallSession(conversation, mode = 'voice') {
+  const client = requireSupabase()
+  if (!conversation?.id) throw new Error('Choose a conversation before starting a call.')
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before starting calls.')
+
+  const { data: session, error } = await client
+    .from('call_sessions')
+    .insert({
+      conversation_id: conversation.id,
+      started_by_profile_id: profile.id,
+      mode,
+      status: 'active',
+      answered_at: new Date().toISOString(),
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+
+  const participant = await client
+    .from('call_participants')
+    .upsert({
+      call_session_id: session.id,
+      profile_id: profile.id,
+      joined_at: new Date().toISOString(),
+      left_at: null,
+    }, { onConflict: 'call_session_id,profile_id' })
+
+  if (participant.error) throw participant.error
+
+  const history = await client
+    .from('calls')
+    .insert({
+      name: conversation.name,
+      type: mode === 'video' ? 'Video call' : 'Voice call',
+      missed: false,
+    })
+
+  if (history.error) throw history.error
+
+  return mapCallSession(session, profile.id)
+}
+
+export async function answerCallSession(callSessionId) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) throw new Error('Register your phone before joining calls.')
+
+  const now = new Date().toISOString()
+  const [{ data: session, error }, participant] = await Promise.all([
+    client
+      .from('call_sessions')
+      .update({ status: 'active', answered_at: now })
+      .eq('id', callSessionId)
+      .select()
+      .single(),
+    client
+      .from('call_participants')
+      .upsert({
+        call_session_id: callSessionId,
+        profile_id: profile.id,
+        joined_at: now,
+        left_at: null,
+      }, { onConflict: 'call_session_id,profile_id' }),
+  ])
+
+  if (error) throw error
+  if (participant.error) throw participant.error
+  return mapCallSession(session, profile.id)
+}
+
+export async function updateCallParticipant(callSessionId, changes) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) return
+
+  const { error } = await client
+    .from('call_participants')
+    .update({
+      muted: Boolean(changes.muted),
+      camera_off: Boolean(changes.cameraOff),
+    })
+    .eq('call_session_id', callSessionId)
+    .eq('profile_id', profile.id)
+
+  if (error) throw error
+}
+
+export async function endCallSession(callSessionId) {
+  const client = requireSupabase()
+  const profile = await getCurrentProfile()
+  if (!profile) return
+
+  const now = new Date().toISOString()
+  const [{ error }, participant] = await Promise.all([
+    client
+      .from('call_sessions')
+      .update({ status: 'ended', ended_at: now })
+      .eq('id', callSessionId),
+    client
+      .from('call_participants')
+      .update({ left_at: now })
+      .eq('call_session_id', callSessionId)
+      .eq('profile_id', profile.id),
+  ])
+
+  if (error) throw error
+  if (participant.error) throw participant.error
+}
+
+export async function subscribeToCallSession(callSessionId, onChange, onError) {
+  const client = requireSupabase()
+  if (!callSessionId) return () => {}
+  const profile = await getCurrentProfile()
+
+  const channel = client
+    .channel(`call-session:${callSessionId}`)
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'call_sessions',
+      filter: `id=eq.${callSessionId}`,
+    }, (payload) => {
+      onChange(mapCallSession(payload.new, profile?.id))
+    })
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onError?.(new Error('Live call connection dropped.'))
+      }
+    })
+
+  return () => {
+    client.removeChannel(channel)
+  }
 }
 
 export async function sendMessage(conversationId, text) {

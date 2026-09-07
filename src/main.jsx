@@ -15,6 +15,7 @@ import {
   MessageCircleMore,
   Mic,
   Phone,
+  PhoneOff,
   Pin,
   Plus,
   Search,
@@ -28,9 +29,10 @@ import {
   UserRound,
   Users,
   Video,
+  VideoOff,
   VolumeX,
 } from 'lucide-react'
-import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, setTypingStatus, startDirectConversation, subscribeToMessages, subscribeToTyping, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
+import { endCallSession, findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToMessages, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -137,7 +139,9 @@ function Icon({ name }) {
     mic: Mic,
     send: Send,
     phone: Phone,
+    phoneOff: PhoneOff,
     video: Video,
+    videoOff: VideoOff,
     lock: Lock,
     pin: Pin,
     mute: VolumeX,
@@ -308,7 +312,7 @@ function MessageBubble({ message }) {
   )
 }
 
-function ChatPage({ active, messages, setMessages, closeChat, routeMode = false, typingUsers = [], backUnread = 0 }) {
+function ChatPage({ active, messages, setMessages, closeChat, routeMode = false, typingUsers = [], backUnread = 0, onStartCall }) {
   const [draft, setDraft] = useState('')
   const [showTools, setShowTools] = useState(false)
   const [showEmojis, setShowEmojis] = useState(false)
@@ -430,8 +434,8 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
           <Icon name="whisper" />
         </button>
         <div className="chat-actions">
-          <button className="icon-button" aria-label="Start voice call"><Icon name="phone" /></button>
-          <button className="icon-button" aria-label="Start video call"><Icon name="video" /></button>
+          <button className="icon-button" aria-label="Start voice call" onClick={() => onStartCall?.(active, 'voice')}><Icon name="phone" /></button>
+          <button className="icon-button" aria-label="Start video call" onClick={() => onStartCall?.(active, 'video')}><Icon name="video" /></button>
           <button className="icon-button" aria-label="Search in conversation"><Icon name="search" /></button>
           <button className="icon-button" aria-label="Chat details"><Icon name="menu" /></button>
         </div>
@@ -507,6 +511,133 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false,
   )
 }
 
+function CallOverlay({ call, contact, onEnd }) {
+  const [muted, setMuted] = useState(false)
+  const [cameraOff, setCameraOff] = useState(call?.mode !== 'video')
+  const [status, setStatus] = useState('Connecting...')
+  const [elapsed, setElapsed] = useState(0)
+  const localVideoRef = useRef(null)
+  const streamRef = useRef(null)
+
+  useEffect(() => {
+    if (!call) return undefined
+
+    let mounted = true
+
+    async function openMedia() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setStatus('Open the installed app or HTTPS preview to use calls.')
+          return
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: call.mode === 'video',
+        })
+
+        if (!mounted) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+
+        streamRef.current = stream
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream
+        setStatus(call.mode === 'video' ? 'Video call active' : 'Voice call active')
+      } catch (error) {
+        setStatus(error?.message || 'Allow microphone access to start calling.')
+      }
+    }
+
+    openMedia()
+
+    return () => {
+      mounted = false
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+  }, [call?.id, call?.mode])
+
+  useEffect(() => {
+    if (!call) return undefined
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [call])
+
+  useEffect(() => {
+    if (!call?.id || call.id === 'starting') return undefined
+
+    let active = true
+    let unsubscribe = () => {}
+    subscribeToCallSession(call.id, (nextCall) => {
+      if (active && nextCall.status === 'ended') onEnd?.()
+    }, (error) => console.warn(error.message)).then((cleanup) => {
+      if (active) unsubscribe = cleanup
+      else cleanup()
+    }).catch((error) => console.warn(error.message))
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [call?.id, onEnd])
+
+  if (!call) return null
+
+  function toggleMute() {
+    const nextMuted = !muted
+    setMuted(nextMuted)
+    streamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = !nextMuted
+    })
+    if (call.id !== 'starting') updateCallParticipant(call.id, { muted: nextMuted, cameraOff }).catch((error) => console.warn(error.message))
+  }
+
+  function toggleCamera() {
+    const nextCameraOff = !cameraOff
+    setCameraOff(nextCameraOff)
+    streamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = !nextCameraOff
+    })
+    if (call.id !== 'starting') updateCallParticipant(call.id, { muted, cameraOff: nextCameraOff }).catch((error) => console.warn(error.message))
+  }
+
+  async function hangUp() {
+    if (call.id === 'starting') {
+      onEnd?.()
+      return
+    }
+    await endCallSession(call.id).catch((error) => console.warn(error.message))
+    onEnd?.()
+  }
+
+  const minutes = String(Math.floor(elapsed / 60)).padStart(2, '0')
+  const seconds = String(elapsed % 60).padStart(2, '0')
+
+  return (
+    <section className={`call-overlay ${call.mode}`}>
+      <div className="call-stage">
+        {call.mode === 'video' && !cameraOff ? (
+          <video ref={localVideoRef} autoPlay muted playsInline />
+        ) : (
+          <Avatar person={contact} size="hero" />
+        )}
+        <div className="call-rings"><i /><i /><i /></div>
+      </div>
+      <div className="call-copy">
+        <span>{call.mode === 'video' ? 'Wave video' : 'Wave voice'}</span>
+        <h2>{contact?.name || 'Wave call'}</h2>
+        <p>{status} - {minutes}:{seconds}</p>
+      </div>
+      <div className="call-controls">
+        <button className={muted ? 'active' : ''} type="button" onClick={toggleMute} aria-label="Mute microphone"><Icon name={muted ? 'mute' : 'mic'} /></button>
+        <button className={cameraOff ? 'active' : ''} type="button" onClick={toggleCamera} aria-label="Toggle camera" disabled={call.mode !== 'video'}><Icon name={cameraOff ? 'videoOff' : 'video'} /></button>
+        <button className="hangup" type="button" onClick={hangUp} aria-label="End call"><Icon name="phoneOff" /></button>
+      </div>
+    </section>
+  )
+}
+
 function StatusPage({ statuses }) {
   return (
     <section className="content-page">
@@ -520,8 +651,9 @@ function StatusPage({ statuses }) {
   )
 }
 
-function CallsPage({ calls }) {
+function CallsPage({ calls, conversations, onStartCall }) {
   const featuredCalls = calls.slice(0, 3)
+  const firstConversation = conversations[0]
 
   return (
     <section className="content-page calls-page">
@@ -530,21 +662,21 @@ function CallsPage({ calls }) {
           <h1>Calls</h1>
           <p>Private voice and video calls, call links, and quiet group rooms.</p>
         </div>
-        <button className="hero-call-button" type="button"><Icon name="video" />Start</button>
+        <button className="hero-call-button" type="button" disabled={!firstConversation} onClick={() => onStartCall?.(firstConversation, 'video')}><Icon name="video" />Start</button>
       </header>
 
       <div className="call-actions">
-        <button type="button">
+        <button type="button" disabled={!firstConversation} onClick={() => onStartCall?.(firstConversation, 'voice')}>
           <span><Icon name="phone" /></span>
           <strong>Call link</strong>
           <small>Create a private link</small>
         </button>
-        <button type="button">
+        <button type="button" disabled={!firstConversation} onClick={() => onStartCall?.(firstConversation, 'video')}>
           <span><Icon name="video" /></span>
           <strong>Video room</strong>
           <small>Start with friends</small>
         </button>
-        <button type="button">
+        <button type="button" disabled={!firstConversation} onClick={() => onStartCall?.(firstConversation, 'voice')}>
           <span><Icon name="spark" /></span>
           <strong>Focus call</strong>
           <small>No rings, just invite</small>
@@ -1042,6 +1174,8 @@ function AppFrame() {
   const [loadError, setLoadError] = useState('')
   const [messages, setMessages] = useState([])
   const [typingUsers, setTypingUsers] = useState([])
+  const [activeCall, setActiveCall] = useState(null)
+  const [callContact, setCallContact] = useState(null)
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
@@ -1064,6 +1198,27 @@ function AppFrame() {
     const data = await getAppData()
     setAppData(data)
     return data
+  }
+
+  async function beginCall(conversation, mode) {
+    if (!conversation?.id) return
+    setCallContact(conversation)
+    setActiveCall({
+      id: 'starting',
+      conversationId: conversation.id,
+      mode,
+      status: 'starting',
+      isMine: true,
+    })
+
+    try {
+      await lightTap()
+      const call = await startCallSession(conversation, mode)
+      setActiveCall(call)
+    } catch (error) {
+      setLoadError(error.message)
+      setActiveCall(null)
+    }
   }
 
   useEffect(() => {
@@ -1165,15 +1320,16 @@ function AppFrame() {
         openChat={(chatId) => navigate(`/chats/${chatId}`)}
         openRegister={() => navigate('/register')}
       />
-      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} backUnread={appData.conversations.reduce((total, item) => total + (item.id === active.id ? 0 : item.unread || 0), 0)} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} />}
+      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} backUnread={appData.conversations.reduce((total, item) => total + (item.id === active.id ? 0 : item.unread || 0), 0)} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} onStartCall={beginCall} />}
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
-      {view === 'Calls' && <CallsPage calls={appData.calls} />}
+      {view === 'Calls' && <CallsPage calls={appData.calls} conversations={appData.conversations} onStartCall={beginCall} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}
       {view === 'Contacts' && <ContactsPage contacts={appData.contacts} refreshAppData={loadAppData} openChat={(chatId) => navigate(`/chats/${chatId}`)} />}
       {view === 'Marketplace' && <MarketplacePage items={appData.marketplace} />}
       {view === 'Settings' && <SettingsPage settings={appData.settings} />}
       <DetailPanel active={active} />
       <BottomNav view={view} setView={setView} />
+      <CallOverlay call={activeCall} contact={callContact || active} onEnd={() => setActiveCall(null)} />
     </main>
   )
 }
