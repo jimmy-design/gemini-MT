@@ -385,6 +385,32 @@ export async function getMessages(conversationId) {
   return data.map((message) => mapMessage(message, profile?.id))
 }
 
+export async function subscribeToMessages(conversationId, onMessage, onError) {
+  const client = requireSupabase()
+  if (!conversationId) return () => {}
+
+  const profile = await getCurrentProfile()
+  const channel = client
+    .channel(`messages:${conversationId}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'messages',
+      filter: `conversation_id=eq.${conversationId}`,
+    }, (payload) => {
+      onMessage(mapMessage(payload.new, profile?.id))
+    })
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onError?.(new Error('Live messages connection dropped. Pull to refresh or reopen the chat.'))
+      }
+    })
+
+  return () => {
+    client.removeChannel(channel)
+  }
+}
+
 export async function sendMessage(conversationId, text) {
   const client = requireSupabase()
   if (!conversationId) throw new Error('Choose a conversation before sending a message.')

@@ -30,7 +30,7 @@ import {
   Video,
   VolumeX,
 } from 'lucide-react'
-import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, startDirectConversation, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
+import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, startDirectConversation, subscribeToMessages, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -117,6 +117,15 @@ const viewByPath = {
   communities: 'Communities',
   marketplace: 'Marketplace',
   settings: 'Settings',
+}
+
+function mergeMessageList(current, incoming) {
+  const withoutDuplicate = current.filter((message) => {
+    if (message.id === incoming.id) return false
+    return !(message.pending && message.from === incoming.from && message.text === incoming.text)
+  })
+
+  return [...withoutDuplicate, incoming]
 }
 
 function Icon({ name }) {
@@ -286,7 +295,7 @@ function ConversationList({ conversations, activeId, setActiveId, query, filter,
 
 function MessageBubble({ message }) {
   return (
-    <div className={`message-row ${message.from}`}>
+    <div className={`message-row ${message.from} ${message.pending ? 'pending' : ''} ${message.failed ? 'failed' : ''}`}>
       <div className={`message-bubble ${message.type}`}>
         {message.type === 'media' && <div className="media-grid"><span /><span /><span /></div>}
         {message.type === 'voice' && <div className="voice-note"><button type="button"><Icon name="mic" /></button><div><i /><i /><i /><i /><i /><i /></div><strong>{message.length}</strong></div>}
@@ -307,22 +316,42 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
   const [whisper, setWhisper] = useState('')
   const [privacyMode, setPrivacyMode] = useState('Standard')
   const [sending, setSending] = useState(false)
+  const isTyping = typeof active?.lastSeen === 'string' && active.lastSeen.toLowerCase().includes('typing')
 
   async function submitMessage(event) {
     event.preventDefault()
     if (!draft.trim() || sending) return
     if (!active?.id) return
     const text = draft.trim()
+    const outgoingText = whisper ? `[${whisper}] ${text}` : text
+    const optimisticId = `pending-${Date.now()}`
+    const optimisticMessage = {
+      id: optimisticId,
+      from: 'me',
+      type: 'text',
+      text: outgoingText,
+      time: 'now',
+      seen: false,
+      reactions: [],
+      pending: true,
+    }
+
     setDraft('')
     setShowEmojis(false)
     setShowWhisper(false)
-    setSending(true)
-    const saved = await sendMessage(active.id, whisper ? `[${whisper}] ${text}` : text)
-    await lightTap()
-    await hideKeyboard()
-    setMessages((current) => [...current, saved])
     setWhisper('')
-    setSending(false)
+    setMessages((current) => [...current, optimisticMessage])
+    setSending(true)
+    try {
+      await lightTap()
+      await hideKeyboard()
+      const saved = await sendMessage(active.id, outgoingText)
+      setMessages((current) => current.map((message) => message.id === optimisticId ? saved : message))
+    } catch (_error) {
+      setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, pending: false, failed: true, time: 'not sent' } : message))
+    } finally {
+      setSending(false)
+    }
   }
 
   async function openAttachmentTools() {
@@ -372,11 +401,13 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
       <div className="message-area">
         <div className="date-divider"><span>Today</span></div>
         {messages.map((message) => <MessageBubble message={message} key={message.id} />)}
-        <div className="typing">
-          <span className="typing-avatar">{active.initials}</span>
-          <span className="typing-dots"><i /><i /><i /></span>
-          <small>{active.name.split(' ')[0]} is typing...</small>
-        </div>
+        {isTyping && (
+          <div className="typing">
+            <span className="typing-avatar">{active.initials}</span>
+            <span className="typing-dots"><i /><i /><i /></span>
+            <small>{active.name.split(' ')[0]} is typing...</small>
+          </div>
+        )}
       </div>
 
       <div className="smart-replies">
@@ -994,7 +1025,43 @@ function AppFrame() {
   useEffect(() => {
     if (!appData) return
     getMessages(activeId).then(setMessages).catch((error) => setLoadError(error.message))
-  }, [activeId, appData])
+  }, [activeId, Boolean(appData)])
+
+  useEffect(() => {
+    if (!appData || !activeId) return undefined
+
+    let active = true
+    let unsubscribe = () => {}
+
+    subscribeToMessages(activeId, (message) => {
+      if (!active) return
+
+      setMessages((current) => mergeMessageList(current, message))
+      setAppData((currentData) => {
+        if (!currentData) return currentData
+
+        return {
+          ...currentData,
+          conversations: currentData.conversations.map((conversation) => (
+            conversation.id === activeId
+              ? { ...conversation, preview: message.text || message.caption || conversation.preview, time: message.time }
+              : conversation
+          )),
+        }
+      })
+    }, (error) => console.warn(error.message)).then((cleanup) => {
+      if (active) {
+        unsubscribe = cleanup
+      } else {
+        cleanup()
+      }
+    }).catch((error) => setLoadError(error.message))
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [activeId, appData?.currentProfile?.id])
 
   if (loadError) return <main className="loading-screen error-screen"><div className="brand-mark">W</div><strong>Database error</strong><small>{loadError}</small></main>
   if (!appData) return <main className="loading-screen"><div className="brand-mark">W</div><strong>Loading Wave...</strong></main>
