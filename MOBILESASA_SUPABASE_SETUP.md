@@ -25,6 +25,7 @@ Use a rotated MobileSasa token:
 ```sh
 supabase secrets set MOBILESASA_API_TOKEN=your-rotated-mobilesasa-token
 supabase secrets set MOBILESASA_BASE_URL=https://api.mobilesasa.com/v1/send/message
+supabase secrets set MOBILESASA_GET_URL=https://api.mobilesasa.com/v1/send/messageget
 supabase secrets set MOBILESASA_SENDER_ID=EASTMATTOTP
 supabase secrets set SEND_SMS_HOOK_SECRET=your-random-hook-signing-secret
 ```

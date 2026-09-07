@@ -11,6 +11,7 @@ type SmsHookEvent = {
 
 const mobileSasaToken = Deno.env.get('MOBILESASA_API_TOKEN')
 const mobileSasaBaseUrl = Deno.env.get('MOBILESASA_BASE_URL') || 'https://api.mobilesasa.com/v1/send/message'
+const mobileSasaGetUrl = Deno.env.get('MOBILESASA_GET_URL') || 'https://api.mobilesasa.com/v1/send/messageget'
 const mobileSasaSenderId = Deno.env.get('MOBILESASA_SENDER_ID') || 'EASTMATTOTP'
 const rawHookSecret = Deno.env.get('SEND_SMS_HOOK_SECRET')
 
@@ -103,6 +104,26 @@ async function sendMobileSasaOtp(phone: string, otp: string) {
   })
 
   const responseText = await mobileSasaResponse.text()
+
+  if (mobileSasaResponse.status === 401) {
+    console.warn('MobileSasa Bearer POST returned 401; retrying legacy GET endpoint.')
+
+    const fallbackUrl = new URL(mobileSasaGetUrl)
+    fallbackUrl.searchParams.set('api_token', mobileSasaToken)
+    fallbackUrl.searchParams.set('senderID', mobileSasaSenderId)
+    fallbackUrl.searchParams.set('phone', mobileSasaPhone)
+    fallbackUrl.searchParams.set('message', message)
+
+    const fallbackResponse = await fetch(fallbackUrl)
+    const fallbackText = await fallbackResponse.text()
+
+    if (!fallbackResponse.ok) {
+      throw new Error(`MobileSasa fallback GET failed with status ${fallbackResponse.status}: ${fallbackText || fallbackResponse.statusText}`)
+    }
+
+    console.log(`MobileSasa OTP sent to ${mobileSasaPhone} through fallback GET endpoint.`)
+    return
+  }
 
   if (!mobileSasaResponse.ok) {
     throw new Error(`MobileSasa SMS failed with status ${mobileSasaResponse.status}: ${responseText || mobileSasaResponse.statusText}`)
