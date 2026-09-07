@@ -1913,7 +1913,7 @@ svg { width: 18px; height: 18px; display: block; }
     border-radius: 22px;
     color: #6b7479;
     background: transparent;
-    font-size: 9.5px;
+    font-size: 8.5px;
     font-weight: 800;
   }
 
@@ -1935,8 +1935,8 @@ svg { width: 18px; height: 18px; display: block; }
   }
 
   .bottom-nav button span {
-    width: 28px;
-    height: 28px;
+    width: 27px;
+    height: 27px;
     display: grid;
     place-items: center;
     border-radius: 50%;
@@ -1945,8 +1945,8 @@ svg { width: 18px; height: 18px; display: block; }
   }
 
   .bottom-nav button svg {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
   }
 
   .bottom-nav .nav-contacts {

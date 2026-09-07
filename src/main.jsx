@@ -49,7 +49,7 @@ if ('serviceWorker' in navigator && import.meta.env.DEV) {
 }
 
 const navItems = ['Chats', 'Channels', 'Status', 'Calls', 'Communities', 'Marketplace', 'Settings']
-const mobileNavItems = ['Contacts', 'Calls', 'Chats', 'Channels', 'Settings']
+const mobileNavItems = ['Contacts', 'Calls', 'Chats', 'Channels', 'Marketplace', 'Settings']
 const filters = ['All', 'Unread', 'Favorites', 'Groups', 'Channels']
 const quickReplies = ['Looks beautiful', 'Call in 10?', 'Send location', 'I can help with that']
 const tools = ['Camera', 'Gallery', 'Document', 'Audio', 'Location', 'Contact', 'Poll', 'Payment']
