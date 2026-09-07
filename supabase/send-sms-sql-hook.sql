@@ -1,7 +1,9 @@
 create extension if not exists pg_net with schema extensions;
 
+drop function if exists public.send_sms(jsonb);
+
 create or replace function public.send_sms(event jsonb)
-returns void
+returns jsonb
 language plpgsql
 security definer
 set search_path = public, extensions, net
@@ -13,6 +15,8 @@ begin
     headers := '{"Content-Type": "application/json"}'::jsonb,
     timeout_milliseconds := 1000
   );
+
+  return '{}'::jsonb;
 end;
 $$;
 
