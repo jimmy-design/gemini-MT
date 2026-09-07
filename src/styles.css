@@ -344,9 +344,9 @@ svg { width: 18px; height: 18px; display: block; }
 .avatar.large { width: 52px; height: 52px; }
 .avatar.hero { width: 88px; height: 88px; margin: 0 auto; font-size: 22px; }
 .avatar.tiny {
-  width: 30px;
-  height: 30px;
-  font-size: 9px;
+  width: 34px;
+  height: 34px;
+  font-size: 10px;
   border: 2px solid rgba(255, 255, 255, 0.92);
 }
 .presence {
@@ -1693,18 +1693,18 @@ svg { width: 18px; height: 18px; display: block; }
     align-items: center;
     justify-content: flex-end;
     flex: 1;
-    min-width: 86px;
-    max-width: 136px;
+    min-width: 108px;
+    max-width: 168px;
     padding: 0 2px;
     background: transparent;
     animation: stackSlideIn 280ms ease both;
   }
 
   .message-stack .avatar {
-    flex: 0 0 28px;
-    width: 28px;
-    height: 28px;
-    margin-left: -12px;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    margin-left: -14px;
     box-shadow: 0 6px 14px rgba(20, 37, 31, 0.14);
   }
 

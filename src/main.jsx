@@ -32,7 +32,7 @@ import {
   VideoOff,
   VolumeX,
 } from 'lucide-react'
-import { createChannel, endCallSession, findRegisteredContactByPhone, getAppData, getMessages, markOnline, requestPhoneOtp, saveRegistrationProfile, sendMessage, sendVoiceMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToChannel, subscribeToMessages, subscribeToPresence, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
+import { createChannel, endCallSession, findRegisteredContactByPhone, getAppData, getMessages, markConversationRead, markOnline, requestPhoneOtp, saveRegistrationProfile, sendMessage, sendVoiceMessage, setTypingStatus, startCallSession, startDirectConversation, subscribeToCallSession, subscribeToChannel, subscribeToMessages, subscribeToPresence, subscribeToTyping, syncContactsToWave, updateCallParticipant, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -176,7 +176,6 @@ function AppHeader({ view, setView, searchOpen, setSearchOpen, conversations, op
   const title = view === 'Contacts' ? 'Contacts' : view
   const unreadProfiles = conversations
     .filter((person) => person.unread > 0)
-    .concat(conversations.filter((person) => !person.unread))
     .slice(0, 6)
 
   return (
@@ -1362,6 +1361,31 @@ function AppFrame() {
     if (params.chatId) navigate(`/chats/${nextId}`)
   }
 
+  function clearUnreadLocally(conversationId) {
+    setAppData((currentData) => {
+      if (!currentData) return currentData
+      return {
+        ...currentData,
+        conversations: currentData.conversations.map((conversation) => (
+          conversation.id === conversationId
+            ? { ...conversation, unread: 0, unreadText: undefined }
+            : conversation
+        )),
+        channels: (currentData.channels || []).map((channel) => (
+          channel.id === conversationId
+            ? { ...channel, unread: 0, unreadText: undefined }
+            : channel
+        )),
+      }
+    })
+  }
+
+  function openConversation(chatId) {
+    clearUnreadLocally(chatId)
+    markConversationRead(chatId).catch((error) => console.warn(error.message))
+    navigate(`/chats/${chatId}`)
+  }
+
   async function loadAppData() {
     const data = await getAppData()
     setAppData(data)
@@ -1430,6 +1454,8 @@ function AppFrame() {
   useEffect(() => {
     if (!appData) return
     getMessages(activeId).then(setMessages).catch((error) => setLoadError(error.message))
+    clearUnreadLocally(activeId)
+    markConversationRead(activeId).catch((error) => console.warn(error.message))
   }, [activeId, Boolean(appData)])
 
   useEffect(() => {
@@ -1521,11 +1547,11 @@ function AppFrame() {
         setQuery={setQuery}
         filter={filter}
         setFilter={setFilter}
-        openChat={(chatId) => navigate(`/chats/${chatId}`)}
+        openChat={openConversation}
         openRegister={() => navigate('/register')}
       />
       {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} backUnread={appData.conversations.reduce((total, item) => total + (item.id === active.id ? 0 : item.unread || 0), 0)} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} onStartCall={beginCall} />}
-      {view === 'Channels' && <ChannelsPage channels={channelConversations} refreshAppData={loadAppData} openChat={(chatId) => navigate(`/chats/${chatId}`)} />}
+      {view === 'Channels' && <ChannelsPage channels={channelConversations} refreshAppData={loadAppData} openChat={openConversation} />}
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
       {view === 'Calls' && <CallsPage calls={appData.calls} conversations={appData.conversations} onStartCall={beginCall} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}

@@ -474,6 +474,18 @@ export async function getMessages(conversationId) {
   return data.map((message) => mapMessage(message, profile?.id))
 }
 
+export async function markConversationRead(conversationId) {
+  const client = requireSupabase()
+  if (!conversationId) return
+
+  const { error } = await client
+    .from('conversations')
+    .update({ unread_count: 0 })
+    .eq('id', conversationId)
+
+  if (error) throw error
+}
+
 export async function markOnline(status = 'online') {
   const client = requireSupabase()
   const profile = await getCurrentProfile()
