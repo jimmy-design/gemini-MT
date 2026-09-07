@@ -73,6 +73,14 @@ create table if not exists public.messages (
 
 alter table public.messages add column if not exists sender_profile_id uuid references public.profiles(id) on delete set null;
 
+create table if not exists public.typing_indicators (
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  is_typing boolean not null default false,
+  updated_at timestamptz not null default now(),
+  primary key (conversation_id, profile_id)
+);
+
 create table if not exists public.conversation_members (
   id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations(id) on delete cascade,
@@ -149,6 +157,7 @@ add constraint user_settings_auth_user_id_unique unique (auth_user_id);
 alter table public.profiles enable row level security;
 alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
+alter table public.typing_indicators enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.user_contacts enable row level security;
 alter table public.status_updates enable row level security;
@@ -165,6 +174,9 @@ drop policy if exists "signed users insert conversations" on public.conversation
 drop policy if exists "signed users update conversations" on public.conversations;
 drop policy if exists "public read messages" on public.messages;
 drop policy if exists "public insert messages" on public.messages;
+drop policy if exists "members read typing indicators" on public.typing_indicators;
+drop policy if exists "members insert own typing indicators" on public.typing_indicators;
+drop policy if exists "members update own typing indicators" on public.typing_indicators;
 drop policy if exists "users read own conversation members" on public.conversation_members;
 drop policy if exists "users insert own conversation members" on public.conversation_members;
 drop policy if exists "users read own matched contacts" on public.user_contacts;
@@ -186,6 +198,44 @@ create policy "signed users insert conversations" on public.conversations for in
 create policy "signed users update conversations" on public.conversations for update using (auth.uid() is not null);
 create policy "public read messages" on public.messages for select using (true);
 create policy "public insert messages" on public.messages for insert with check (true);
+create policy "members read typing indicators" on public.typing_indicators for select using (
+  exists (
+    select 1
+    from public.conversation_members own_member
+    join public.profiles own_profile on own_profile.id = own_member.profile_id
+    where own_member.conversation_id = typing_indicators.conversation_id
+      and own_profile.auth_user_id = auth.uid()
+  )
+);
+create policy "members insert own typing indicators" on public.typing_indicators for insert with check (
+  exists (
+    select 1
+    from public.profiles
+    where profiles.id = typing_indicators.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+  and exists (
+    select 1
+    from public.conversation_members
+    where conversation_members.conversation_id = typing_indicators.conversation_id
+      and conversation_members.profile_id = typing_indicators.profile_id
+  )
+);
+create policy "members update own typing indicators" on public.typing_indicators for update using (
+  exists (
+    select 1
+    from public.profiles
+    where profiles.id = typing_indicators.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+) with check (
+  exists (
+    select 1
+    from public.profiles
+    where profiles.id = typing_indicators.profile_id
+      and profiles.auth_user_id = auth.uid()
+  )
+);
 create policy "users read own conversation members" on public.conversation_members for select using (
   exists (
     select 1 from public.profiles

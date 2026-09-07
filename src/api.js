@@ -133,6 +133,18 @@ function mapMatchedContact(row) {
   }
 }
 
+function mapTypingIndicator(row) {
+  const profile = row.profile || {}
+  return {
+    conversationId: row.conversation_id,
+    profileId: row.profile_id,
+    name: profile.name || 'Someone',
+    initials: profile.initials || 'W',
+    color: profile.color || 'mint',
+    updatedAt: row.updated_at,
+  }
+}
+
 function mapMarketplaceItem(row) {
   return {
     id: row.id,
@@ -409,6 +421,86 @@ export async function subscribeToMessages(conversationId, onMessage, onError) {
   return () => {
     client.removeChannel(channel)
   }
+}
+
+async function fetchTypingIndicators(client, conversationId, currentProfileId) {
+  const since = new Date(Date.now() - 7000).toISOString()
+  const { data, error } = await client
+    .from('typing_indicators')
+    .select('conversation_id, profile_id, is_typing, updated_at, profile:profile_id(name, initials, color)')
+    .eq('conversation_id', conversationId)
+    .eq('is_typing', true)
+    .gt('updated_at', since)
+
+  if (error) throw error
+
+  return data
+    .filter((item) => item.profile_id !== currentProfileId)
+    .map(mapTypingIndicator)
+}
+
+export async function subscribeToTyping(conversationId, onTyping, onError) {
+  const client = requireSupabase()
+  if (!conversationId) return () => {}
+
+  const profile = await getCurrentProfile()
+  if (!profile) return () => {}
+
+  let refreshTimer = null
+
+  async function emitTyping() {
+    try {
+      const typingUsers = await fetchTypingIndicators(client, conversationId, profile.id)
+      onTyping(typingUsers)
+    } catch (error) {
+      onError?.(error)
+    }
+  }
+
+  const channel = client
+    .channel(`typing:${conversationId}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'typing_indicators',
+      filter: `conversation_id=eq.${conversationId}`,
+    }, () => {
+      emitTyping()
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(emitTyping, 7500)
+    })
+    .subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        onError?.(new Error('Live typing connection dropped. Reopen the chat to reconnect.'))
+      }
+    })
+
+  emitTyping()
+
+  return () => {
+    window.clearTimeout(refreshTimer)
+    client.removeChannel(channel)
+  }
+}
+
+export async function setTypingStatus(conversationId, isTyping) {
+  const client = requireSupabase()
+  if (!conversationId) return
+  const profile = await getCurrentProfile()
+  if (!profile) return
+
+  const { error } = await client
+    .from('typing_indicators')
+    .upsert({
+      conversation_id: conversationId,
+      profile_id: profile.id,
+      is_typing: isTyping,
+      updated_at: new Date().toISOString(),
+    }, {
+      onConflict: 'conversation_id,profile_id',
+    })
+
+  if (error) throw error
 }
 
 export async function sendMessage(conversationId, text) {

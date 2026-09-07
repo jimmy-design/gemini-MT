@@ -30,7 +30,7 @@ import {
   Video,
   VolumeX,
 } from 'lucide-react'
-import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, startDirectConversation, subscribeToMessages, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
+import { findRegisteredContactByPhone, getAppData, getMessages, requestPhoneOtp, saveRegistrationProfile, sendMessage, setTypingStatus, startDirectConversation, subscribeToMessages, subscribeToTyping, syncContactsToWave, updateUserSettings, verifyPhoneOtp } from './api'
 import { hideKeyboard, lightTap, pickChatPhoto, readDeviceContacts, shareWaveInvite } from './native'
 import './styles.css'
 
@@ -308,7 +308,7 @@ function MessageBubble({ message }) {
   )
 }
 
-function ChatPage({ active, messages, setMessages, closeChat, routeMode = false }) {
+function ChatPage({ active, messages, setMessages, closeChat, routeMode = false, typingUsers = [] }) {
   const [draft, setDraft] = useState('')
   const [showTools, setShowTools] = useState(false)
   const [showEmojis, setShowEmojis] = useState(false)
@@ -316,7 +316,45 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
   const [whisper, setWhisper] = useState('')
   const [privacyMode, setPrivacyMode] = useState('Standard')
   const [sending, setSending] = useState(false)
-  const isTyping = typeof active?.lastSeen === 'string' && active.lastSeen.toLowerCase().includes('typing')
+  const typingTimer = useRef(null)
+  const lastTypingState = useRef(false)
+  const isTyping = typingUsers.length > 0
+  const typingLabel = typingUsers.length > 1
+    ? `${typingUsers.length} people are typing...`
+    : `${typingUsers[0]?.name?.split(' ')[0] || active.name.split(' ')[0]} is typing...`
+
+  function publishTyping(nextState) {
+    if (!active?.id) return
+    if (lastTypingState.current === nextState) return
+    lastTypingState.current = nextState
+    setTypingStatus(active.id, nextState).catch((error) => console.warn(error.message))
+  }
+
+  function handleDraftChange(event) {
+    const value = event.target.value
+    setDraft(value)
+
+    window.clearTimeout(typingTimer.current)
+    if (!value.trim()) {
+      publishTyping(false)
+      return
+    }
+
+    publishTyping(true)
+    typingTimer.current = window.setTimeout(() => publishTyping(false), 1800)
+  }
+
+  useEffect(() => {
+    lastTypingState.current = false
+    window.clearTimeout(typingTimer.current)
+
+    return () => {
+      window.clearTimeout(typingTimer.current)
+      if (lastTypingState.current && active?.id) {
+        setTypingStatus(active.id, false).catch((error) => console.warn(error.message))
+      }
+    }
+  }, [active?.id])
 
   async function submitMessage(event) {
     event.preventDefault()
@@ -337,6 +375,8 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
     }
 
     setDraft('')
+    publishTyping(false)
+    window.clearTimeout(typingTimer.current)
     setShowEmojis(false)
     setShowWhisper(false)
     setWhisper('')
@@ -403,9 +443,9 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
         {messages.map((message) => <MessageBubble message={message} key={message.id} />)}
         {isTyping && (
           <div className="typing">
-            <span className="typing-avatar">{active.initials}</span>
+            <span className={`typing-avatar ${typingUsers[0]?.color || active.color}`}>{typingUsers[0]?.initials || active.initials}</span>
             <span className="typing-dots"><i /><i /><i /></span>
-            <small>{active.name.split(' ')[0]} is typing...</small>
+            <small>{typingLabel}</small>
           </div>
         )}
       </div>
@@ -447,7 +487,7 @@ function ChatPage({ active, messages, setMessages, closeChat, routeMode = false 
       <form className="composer" onSubmit={submitMessage}>
         <button className="attach-button" type="button" aria-label="Attach" onClick={openAttachmentTools}><Icon name="plus" /></button>
         <div className="message-capsule">
-          <input value={draft} onFocus={() => setShowEmojis(false)} onChange={(event) => setDraft(event.target.value)} placeholder={whisper ? `${whisper} message` : 'Message'} aria-label="Message" />
+          <input value={draft} onFocus={() => setShowEmojis(false)} onChange={handleDraftChange} placeholder={whisper ? `${whisper} message` : 'Message'} aria-label="Message" />
           <button className="emoji-button" type="button" aria-label="Open emojis" onClick={toggleEmojis}>:)</button>
         </div>
         {draft.trim() ? (
@@ -994,6 +1034,7 @@ function AppFrame() {
   const [appData, setAppData] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [messages, setMessages] = useState([])
+  const [typingUsers, setTypingUsers] = useState([])
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
@@ -1063,6 +1104,30 @@ function AppFrame() {
     }
   }, [activeId, appData?.currentProfile?.id])
 
+  useEffect(() => {
+    if (!appData || !activeId) return undefined
+
+    let active = true
+    let unsubscribe = () => {}
+    setTypingUsers([])
+
+    subscribeToTyping(activeId, (users) => {
+      if (active) setTypingUsers(users)
+    }, (error) => console.warn(error.message)).then((cleanup) => {
+      if (active) {
+        unsubscribe = cleanup
+      } else {
+        cleanup()
+      }
+    }).catch((error) => console.warn(error.message))
+
+    return () => {
+      active = false
+      setTypingUsers([])
+      unsubscribe()
+    }
+  }, [activeId, appData?.currentProfile?.id])
+
   if (loadError) return <main className="loading-screen error-screen"><div className="brand-mark">W</div><strong>Database error</strong><small>{loadError}</small></main>
   if (!appData) return <main className="loading-screen"><div className="brand-mark">W</div><strong>Loading Wave...</strong></main>
   if (appData.needsRegistration) return <AuthRequired openRegister={() => navigate('/register')} />
@@ -1093,7 +1158,7 @@ function AppFrame() {
         openChat={(chatId) => navigate(`/chats/${chatId}`)}
         openRegister={() => navigate('/register')}
       />
-      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} />}
+      {view === 'Chats' && <ChatPage active={active} messages={messages} setMessages={setMessages} typingUsers={typingUsers} routeMode={Boolean(params.chatId)} closeChat={() => navigate('/chats')} />}
       {view === 'Status' && <StatusPage statuses={appData.statuses} />}
       {view === 'Calls' && <CallsPage calls={appData.calls} />}
       {view === 'Communities' && <CommunitiesPage communities={appData.communities} />}
