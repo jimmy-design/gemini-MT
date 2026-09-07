@@ -301,7 +301,7 @@ function MessageBubble({ message }) {
         {message.type === 'voice' && <div className="voice-note"><button type="button"><Icon name="mic" /></button><div><i /><i /><i /><i /><i /><i /></div><strong>{message.length}</strong></div>}
         {message.type === 'text' && <p>{message.text}</p>}
         {message.type === 'media' && <p>{message.caption}</p>}
-        <small>{message.time}{message.seen && <span className="seen"> <Icon name="check" /></span>}</small>
+        <small>{message.time}{message.from === 'me' && message.seen && <span className="seen"> <Icon name="check" /></span>}</small>
         {message.reactions?.length > 0 && <span className="reaction">{message.reactions.map((reaction) => <Icon key={reaction} name={reaction} />)}</span>}
       </div>
     </div>
